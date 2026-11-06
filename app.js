@@ -1,19 +1,10 @@
 /* Protein Planner — DRAFT. Offline, no login, no ads. Local storage only. */
 const DRAFT = true; // set false after Dr D signs off CONTENT_REVIEW.md
-const STORE_KEY = "protein-planner-v2";
+const STORE_KEY = "protein-planner-v3";
 
-const CHEERS = [
-  "Plate looking good.",
-  "Nice add.",
-  "Protein climbing.",
-  "Keep stacking.",
-  "Solid pick.",
-];
-const HIT_LINES = [
-  "You hit today's target.",
-  "Plate filled — nice work.",
-  "Target reached.",
-];
+const CHEERS = ["Nice add.", "Protein climbing.", "Solid pick.", "Keep going."];
+const MEAL_DONE = ["Meal done — nice.", "That meal's covered.", "Meal complete."];
+const DAY_DONE = ["You finished today's plan!", "Day's protein — done.", "Plan complete. Nice work."];
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const el = (tag, attrs = {}, ...kids) => {
@@ -144,6 +135,56 @@ function mealProtein(i) {
   return Math.round(p * 10) / 10;
 }
 
+function mealTarget() { return perMealTarget(); }
+
+function mealComplete(i) {
+  const per = mealTarget();
+  if (!per) return false;
+  return mealProtein(i) >= per * 0.9;
+}
+
+function dayComplete() {
+  const t = dailyTarget();
+  if (!t) return false;
+  if (totals().protein >= t * 0.95) return true;
+  for (let i = 0; i < state.mealSlots; i++) if (!mealComplete(i)) return false;
+  return state.mealSlots > 0;
+}
+
+function mealLeft(i) {
+  const per = mealTarget();
+  if (!per) return null;
+  return Math.max(0, Math.round((per - mealProtein(i)) * 10) / 10);
+}
+
+function suggestForMeal(n) {
+  const left = mealLeft(state.activeMeal);
+  if (left == null || left <= 0) return [];
+  const pool = CONTENT.foods
+    .filter((f) => (f.sets || ["us"]).includes(state.foodSet))
+    .slice()
+    .sort((a, b) => relevanceScore(b) - relevanceScore(a));
+  // Prefer foods close to remaining grams (not huge overshoot)
+  const scored = pool.map((f) => {
+    const over = Math.max(0, f.protein - left);
+    return { f, score: relevanceScore(f) - over * 0.5 + (f.protein <= left * 1.15 ? 5 : 0) };
+  });
+  scored.sort((a, b) => b.score - a.score);
+  const out = [];
+  for (const { f } of scored) {
+    if (out.find((x) => x.id === f.id)) continue;
+    out.push(f);
+    if (out.length >= n) break;
+  }
+  return out;
+}
+
+function nextOpenMeal() {
+  for (let i = 0; i < state.mealSlots; i++) if (!mealComplete(i)) return i;
+  return null;
+}
+
+
 
 function totals() {
   let protein = 0, phosphorus = 0, potassium = 0, sodium = 0;
@@ -185,13 +226,18 @@ function flash(msg) {
 }
 
 function addFood(id) {
-  const before = dailyTarget() ? totals().protein / dailyTarget() : 0;
-  const existing = state.plan.find((x) => x.id === id);
-  if (existing && (existing.meal ?? 0) === state.activeMeal) existing.servings += 1;
+  if (dayComplete()) {
+    flash(DAY_DONE[Math.floor(Math.random() * DAY_DONE.length)]);
+    render();
+    return;
+  }
+  const mealBefore = mealComplete(state.activeMeal);
+  const existing = state.plan.find((x) => x.id === id && (x.meal ?? 0) === state.activeMeal);
+  if (existing) existing.servings += 1;
   else state.plan.push({ id, servings: 1, meal: state.activeMeal });
   save();
-  const after = dailyTarget() ? totals().protein / dailyTarget() : 0;
-  if (dailyTarget() && before < 1 && after >= 1) flash(HIT_LINES[Math.floor(Math.random() * HIT_LINES.length)]);
+  if (dayComplete()) flash(DAY_DONE[Math.floor(Math.random() * DAY_DONE.length)]);
+  else if (!mealBefore && mealComplete(state.activeMeal)) flash(MEAL_DONE[Math.floor(Math.random() * MEAL_DONE.length)]);
   else flash(CHEERS[Math.floor(Math.random() * CHEERS.length)]);
   render();
 }
@@ -315,36 +361,40 @@ function mineralChips(p, k, na, compact) {
 
 
 function setSwitch() {
+  const order = ["us", "veg", "desi"];
   const sets = CONTENT.foodSets || {};
-  return el("div", { class: "setSwitch", id: "setSwitch" },
-    ...Object.values(sets).map((s) => el("button", {
-      type: "button", class: "setBtn" + (state.foodSet === s.id ? " on" : ""),
-      id: `set-${s.id}`,
-      onclick: () => { state.foodSet = s.id; state.filter = "for-you"; state.query = ""; save(); render(); },
-      text: `${s.emoji} ${s.short}`
-    }))
+  return el("div", { class: "setSwitch", id: "setSwitch", role: "tablist" },
+    ...order.filter((id) => sets[id]).map((id) => {
+      const s = sets[id];
+      return el("button", {
+        type: "button", role: "tab",
+        class: "setBtn" + (state.foodSet === s.id ? " on" : ""),
+        id: `set-${s.id}`,
+        onclick: () => { state.foodSet = s.id; state.filter = "for-you"; state.query = ""; save(); render(); },
+        text: s.label
+      });
+    })
   );
 }
 
 function mealChips(editable) {
-  const per = perMealTarget();
+  const per = mealTarget();
   const row = el("div", { class: "mealRow", id: "mealRow" });
   for (let i = 0; i < state.mealSlots; i++) {
     const got = mealProtein(i);
-    const hit = per && got >= per * 0.9;
+    const done = mealComplete(i);
     row.append(el("button", {
       type: "button",
-      class: "mealChip" + (state.activeMeal === i ? " on" : "") + (hit ? " filled" : ""),
+      class: "mealChip" + (state.activeMeal === i ? " on" : "") + (done ? " filled" : ""),
       id: `meal-${i}`,
-      onclick: () => { state.activeMeal = i; render(); },
-      html: `<b>${mealLabel(i)}</b><span>${got}g${per ? ` / ${per}g` : ""}</span>`
+      onclick: () => { state.activeMeal = i; state.tab = "add"; render(); },
+      html: `<b>${mealLabel(i)}</b><span>${done ? "✓" : (per ? `${got}/${per}g` : `${got}g`)}</span>`
     }));
   }
   if (editable) {
     row.append(el("div", { class: "mealAdjust" },
       el("button", { type: "button", id: "mealsMinus", disabled: state.mealSlots <= 2,
         onclick: () => { state.mealSlots = Math.max(2, state.mealSlots - 1); if (state.activeMeal >= state.mealSlots) state.activeMeal = state.mealSlots - 1; save(); render(); }, text: "−" }),
-      el("span", { class: "tiny", text: `${state.mealSlots}×` }),
       el("button", { type: "button", id: "mealsPlus", disabled: state.mealSlots >= 6,
         onclick: () => { state.mealSlots = Math.min(6, state.mealSlots + 1); save(); render(); }, text: "+" })
     ));
@@ -357,15 +407,16 @@ function progressHero() {
   const t = dailyTarget();
   const tot = totals();
   const pct = t ? (tot.protein / t) * 100 : 0;
-  const hit = t && tot.protein >= t && tot.protein <= t * 1.08;
-  const over = t && tot.protein > t * 1.08;
-  const left = t ? Math.round((t - tot.protein) * 10) / 10 : null;
+  const done = dayComplete();
+  const hit = done;
+  const over = t && tot.protein > t * 1.1;
+  const leftMeal = mealLeft(state.activeMeal);
+  const mealDone = mealComplete(state.activeMeal);
   let status;
   if (!t) status = "Set a target to start.";
-  else if (hit) status = HIT_LINES[0];
-  else if (over) status = `${Math.round((tot.protein - t) * 10) / 10} g over — check with your team.`;
-  else if (pct >= 70) status = `${left} g to go — almost there.`;
-  else if (tot.protein > 0) status = `${left} g left on the plate.`;
+  else if (done) status = DAY_DONE[0];
+  else if (mealDone) status = `${mealLabel(state.activeMeal)} done. Next meal?`;
+  else if (leftMeal != null) status = `${leftMeal}g left for ${mealLabel(state.activeMeal)}.`;
   else status = "Add foods to fill your plate.";
 
   return el("div", { class: "card hero" },
@@ -378,13 +429,9 @@ function progressHero() {
         el("div", { class: "statusLine" + (hit ? " good" : "") + (over ? " warn" : ""), id: "proteinStatus", text: status })
       )
     ),
-    mealChips(true),
-    el("p", { class: "tiny muted", text: perMealTarget()
-      ? `Aim ~${perMealTarget()}g protein each time · tap a meal, then add foods`
-      : "Set a target to split protein across meals" }),
-    p && p.show_minerals ? el("div", { id: "mineralTotals" },
-      mineralChips(tot.phosphorus, tot.potassium, tot.sodium, false),
-      el("p", { class: "tiny muted", text: "Running totals — no caps set here." })
+    mealChips(false),
+    p && p.show_minerals ? el("div", { id: "mineralTotals", class: "mineralsCompact" },
+      mineralChips(tot.phosphorus, tot.potassium, tot.sodium, true)
     ) : null,
     state.flash ? el("div", { class: "toast", id: "toast", text: state.flash }) : null
   );
@@ -500,9 +547,9 @@ function renderSetup() {
       }
     }) : null,
     el("div", { class: "suggestCard soft" },
-      el("div", { class: "muted tiny", text: "Eating times (draft)" }),
+      el("div", { class: "muted tiny", text: "Meals today" }),
       mealChips(true),
-      el("div", { class: "tiny muted", text: ((CONTENT.mealDefaults || {})[state.profileId] || {}).rationale || "Educational split — not medical advice." })
+      el("div", { class: "tiny muted", text: "Draft split for finishing the day — not a prescription." })
     ),
     el("button", {
       class: "btn btnPrimary btnBlock", type: "button", id: "toPlanBtn",
@@ -527,69 +574,85 @@ function renderSetup() {
 
 function renderAddTab() {
   const showM = profile()?.show_minerals;
-  const filters = [
-    ["for-you", "For you"],
-    ["all", "All"],
-    ["meat", "Meat"],
-    ["fish", "Fish"],
-    ["egg", "Eggs"],
-    ["dairy", "Dairy"],
-    ["plant", "Plant"],
-    ["bar", "Bars"],
-    ["restaurant", "Out"],
-  ];
-  const chips = el("div", { class: "chips", id: "catChips" },
-    ...filters.map(([id, label]) => el("button", {
-      type: "button", class: "chip" + (state.filter === id ? " on" : ""),
-      dataset: { cat: id },
-      onclick: () => { state.filter = id; render(); },
-      text: label
-    }))
+  const done = dayComplete();
+  const mealDone = mealComplete(state.activeMeal);
+  const left = mealLeft(state.activeMeal);
+  const suggestions = (!done && !mealDone) ? suggestForMeal(3) : [];
+
+  if (done) {
+    return el("div", {},
+      progressHero(),
+      el("div", { class: "card celebrate", id: "doneCard" },
+        el("h2", { text: "You finished today's plan" }),
+        el("p", { class: "muted", text: "Nice work. Come back tomorrow — or tweak a meal on Plate." }),
+        el("button", { class: "btn btnPrimary btnBlock", type: "button", id: "viewPlateBtn",
+          onclick: () => { state.tab = "plate"; render(); }, text: "See your plate" })
+      )
+    );
+  }
+
+  const guide = el("div", { class: "card guide" },
+    el("div", { class: "row between" },
+      el("h2", { text: mealLabel(state.activeMeal) }),
+      setSwitch()
+    ),
+    mealDone
+      ? el("div", {},
+          el("p", { class: "statusLine good", text: "This meal's protein share is filled." }),
+          el("button", {
+            class: "btn btnPrimary btnBlock", type: "button", id: "nextMealBtn",
+            onclick: () => {
+              const n = nextOpenMeal();
+              if (n == null) { render(); return; }
+              state.activeMeal = n; save(); render();
+            },
+            text: nextOpenMeal() == null ? "All meals done" : `Next: ${mealLabel(nextOpenMeal())} →`
+          })
+        )
+      : el("div", {},
+          el("p", { class: "muted", text: left != null ? `${left}g to go — tap a pick` : "Pick a food" }),
+          el("div", { class: "suggestRow", id: "suggestRow" },
+            ...suggestions.map((f) => el("button", {
+              type: "button", class: "suggestCardBtn", id: `sug-${f.id}`,
+              onclick: () => addFood(f.id),
+              html: `<span class="emoji">${f.emoji}</span><span class="name">${f.name}</span><span class="meta"><b>${f.protein}g</b></span>`
+            }))
+          ),
+          suggestions.length ? el("button", {
+            class: "btn btnGhost btnBlock", type: "button", id: "fillMealBtn",
+            onclick: () => { if (suggestions[0]) addFood(suggestions[0].id); },
+            text: `Add ${suggestions[0].emoji} ${suggestions[0].name}`
+          }) : null
+        )
   );
+
+  // Compact browse: search + short list, no category chip wall
   const list = el("div", { class: "foodList", id: "foodList" });
-  const foods = filteredFoods();
-  foods.slice(0, state.filter === "for-you" ? (state.foodSet === "desi" ? foods.length : 24) : foods.length).forEach((f, i) => {
+  const foods = filteredFoods().slice(0, state.query ? 40 : 8);
+  foods.forEach((f) => {
     list.append(
-      el("div", { class: "foodItem" + (state.filter === "for-you" && i < 3 ? " featured" : "") },
+      el("div", { class: "foodItem" },
         el("div", { class: "emoji", text: f.emoji }),
         el("div", { class: "foodBody" },
           el("div", { class: "name", text: f.name }),
-          el("div", { class: "meta", text: `${f.serving} · ` },
-            el("b", { text: `${f.protein}g` }),
-            " protein"
-          ),
-          showM ? mineralChips(f.phosphorus, f.potassium, f.sodium, true) : null,
-          state.showSrc === f.id ? el("div", { class: "srcLine", text: f.src }) : null
+          el("div", { class: "meta", text: `${f.serving} · ` }, el("b", { text: `${f.protein}g` })),
+          showM ? mineralChips(f.phosphorus, f.potassium, f.sodium, true) : null
         ),
-        el("div", { class: "foodActions" },
-          el("button", {
-            class: "addBtn", type: "button", id: `add-${f.id}`,
-            onclick: () => addFood(f.id), text: "+"
-          }),
-          el("button", {
-            class: "srcBtn", type: "button", title: "Source",
-            onclick: () => { state.showSrc = state.showSrc === f.id ? null : f.id; render(); },
-            text: "i"
-          })
-        )
+        el("button", { class: "addBtn", type: "button", id: `add-${f.id}`,
+          onclick: () => addFood(f.id), text: "+", disabled: mealDone })
       )
     );
   });
+
   return el("div", {},
     progressHero(),
-    el("div", { class: "card" },
-      el("div", { class: "row between" },
-        el("h2", { text: state.filter === "for-you" ? "Try these first" : "Foods" }),
-        setSwitch()
-      ),
-      state.foodSet === "desi" ? el("p", { class: "tiny muted", text: (CONTENT.foodSets.desi || {}).note || "" }) : null,
-      el("p", { class: "tiny muted", text: `Adding to ${mealLabel(state.activeMeal)}` }),
+    guide,
+    mealDone ? null : el("div", { class: "card" },
       el("input", {
-        type: "search", id: "foodSearch", placeholder: "Search…",
+        type: "search", id: "foodSearch", placeholder: "Search more foods…",
         value: state.query,
-        oninput: (e) => { state.query = e.target.value; render(); }
+        oninput: (e) => { state.query = e.target.value; state.filter = "for-you"; render(); }
       }),
-      chips,
       list
     )
   );
@@ -663,7 +726,7 @@ function renderMoreTab() {
 
 function renderPlay() {
   const tabs = el("div", { class: "tabs", role: "tablist" },
-    ...[["add", "Add"], ["plate", "Plate"], ["more", "More"]].map(([id, label]) =>
+    ...[["add", "Build"], ["plate", "Plate"], ["more", "More"]].map(([id, label]) =>
       el("button", {
         type: "button", role: "tab", id: `tab-${id}`,
         class: state.tab === id ? "on" : "",
@@ -715,4 +778,4 @@ if ("serviceWorker" in navigator) {
   });
 }
 
-window.__PP = { state, dailyTarget, totals, suggestedTarget, profile, addFood, changeServings, changeServingsAt, save, render, relevanceScore, perMealTarget, mealProtein, defaultMealSlots };
+window.__PP = { state, dailyTarget, totals, suggestedTarget, profile, addFood, changeServings, changeServingsAt, save, render, relevanceScore, perMealTarget, mealProtein, defaultMealSlots, mealComplete, dayComplete, suggestForMeal, nextOpenMeal };
