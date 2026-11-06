@@ -230,6 +230,28 @@
   .shakeChip .shakeProt{ color:var(--tealDeep); font-weight:800; }
   .shakeChip:active{ transform:scale(.97); }
 
+
+  .shareActions{ display:flex; flex-direction:column; gap:.45rem; }
+  .sheetScrim{ position:fixed; inset:0; z-index:80; background:rgba(15,23,42,.55); display:flex; align-items:flex-end; justify-content:center; padding: var(--sat) var(--sar) var(--sab) var(--sal); backdrop-filter: blur(4px); }
+  .sheet{ width:min(32.5rem,100%); max-height:min(88vh, 40rem); overflow-y:auto; -webkit-overflow-scrolling:touch;
+    background:#fff; color:var(--text); border-radius:1.5rem 1.5rem 0 0; box-shadow:var(--shadowLg);
+    padding:.55rem 1.05rem calc(1.1rem + var(--sab)); display:flex; flex-direction:column; gap:.55rem;
+    animation: sheetUp .28s cubic-bezier(.22,1,.36,1); }
+  .sheetHandle{ width:2.6rem; height:.28rem; border-radius:999px; background:#cbd5e1; margin:.15rem auto .35rem; }
+  .sharePreview{ white-space:pre-wrap; word-break:break-word; font-size:.72rem; line-height:1.4; color:#334155;
+    background:var(--cream); border:1px solid var(--line); border-radius:1rem; padding:.75rem .8rem; max-height:10rem; overflow:auto; margin:0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .shopList{ display:flex; flex-direction:column; gap:.5rem; }
+  .shopItem{ display:grid; grid-template-columns:auto 1fr auto; gap:.55rem; align-items:center;
+    border:1.5px solid var(--line); border-radius:1.15rem; padding:.7rem .75rem; background:#fff; }
+  .shopBody{ min-width:0; }
+  .shopLinks{ display:flex; flex-direction:column; gap:.3rem; }
+  .shopLink{ display:inline-flex; align-items:center; justify-content:center; min-height:2.15rem; min-width:4.6rem;
+    padding:.35rem .55rem; border-radius:.75rem; font-size:.72rem; font-weight:800; text-decoration:none;
+    background:linear-gradient(135deg,#0f766e,#14b8a6); color:#fff; box-shadow:0 .2rem .55rem rgba(15,118,110,.25); }
+  .shopLink.costco{ background:linear-gradient(135deg,#1e3a8a,#2563eb); box-shadow:0 .2rem .55rem rgba(37,99,235,.25); }
+  @keyframes sheetUp{ from{ transform:translateY(18px); opacity:0 } to{ transform:none; opacity:1 } }
+  @media (prefers-reduced-motion: reduce){ .sheet { animation:none; } }
+
 </style>
 </head>
 <body>

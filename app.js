@@ -46,6 +46,7 @@ const state = {
   flash: "",
   showCustom: false,
   showSrc: null,
+  sheet: null, // null | "share" | "shop"
 };
 
 function load() {
@@ -438,8 +439,386 @@ function filteredFoods() {
   return list;
 }
 
+
 function shortDisclaimer() {
   return "Education only — not medical advice. Follow your clinician or dietitian.";
+}
+
+/** Grocery-facing short name for shopping links. Does not change nutrient values. */
+function shopName(f) {
+  if (!f) return "";
+  const byId = {
+    "chicken-breast": "chicken breast",
+    "chicken-dark": "chicken thighs",
+    "turkey-breast": "turkey breast",
+    "ground-turkey": "ground turkey",
+    "ground-beef": "lean ground beef",
+    "beef-steak": "beef steak",
+    "pork-loin": "pork loin",
+    "lamb": "lamb",
+    "salmon": "salmon fillet",
+    "tilapia": "tilapia",
+    "cod": "cod fillet",
+    "shrimp": "shrimp",
+    "catfish": "catfish",
+    "trout": "trout",
+    "tuna-canned": "canned tuna",
+    "tuna-fresh": "tuna steak",
+    "sardines": "sardines",
+    "egg": "eggs",
+    "egg-white": "egg whites",
+    "egg-substitute": "egg substitute",
+    "greek-yogurt": "Greek yogurt",
+    "yogurt-plain": "plain yogurt",
+    "cottage-cheese": "cottage cheese",
+    "ricotta": "ricotta cheese",
+    "mozzarella": "mozzarella cheese",
+    "cheddar": "cheddar cheese",
+    "paneer": "paneer",
+    "palak-paneer": "palak paneer",
+    "tofu": "tofu",
+    "tempeh": "tempeh",
+    "edamame": "edamame",
+    "quinoa": "quinoa",
+    "brown-rice": "brown rice",
+    "hummus": "hummus",
+    "falafel": "falafel",
+    "veggie-burger": "veggie burger patties",
+    "dal": "dal lentils",
+    "sambar": "sambar mix",
+    "chana": "chickpeas",
+    "black-beans": "black beans",
+    "lentils": "lentils",
+    "urad": "urad dal",
+    "moong": "moong dal",
+    "naan": "naan bread",
+    "paratha": "paratha",
+    "idli": "idli mix",
+    "dosa-plain": "dosa mix",
+    "apple": "apples",
+    "mushrooms-white": "white mushrooms",
+    "mushrooms-portabella": "portabella mushrooms",
+    "mushrooms-shiitake": "shiitake mushrooms",
+    "mushrooms-oyster": "oyster mushrooms",
+    "mushrooms-crimini": "crimini mushrooms",
+  };
+  if (byId[f.id]) return byId[f.id];
+  if (f.id.startsWith("shake-")) {
+    return f.name.replace(/\s*shake.*$/i, " protein shake").replace(/,/g, "").trim();
+  }
+  if (f.id.startsWith("bar-")) {
+    return f.name.replace(/\s*\(.*?\)\s*/g, " ").replace(/\s+/g, " ").trim() + (/\bbar\b/i.test(f.name) ? "" : " bar");
+  }
+  let n = f.name;
+  n = n.replace(/\s*\([^)]*USDA[^)]*\)/gi, "");
+  n = n.replace(/\s*\([^)]*FNDDS[^)]*\)/gi, "");
+  n = n.replace(/,?\s*(roasted|cooked|boiled|grilled|baked|dry heat|meat only|skinless|no salt|part-skim|low fat|nonfat|fat free)(,|\s|$)/gi, " ");
+  n = n.replace(/\s*,\s*/g, " ");
+  n = n.replace(/\s+/g, " ").trim();
+  return n || f.name;
+}
+
+/** Skip restaurant / fast-food plate items that are not grocery buys. */
+function isGroceryItem(f) {
+  if (!f) return false;
+  if (f.cat === "restaurant") return false;
+  const blob = `${f.id} ${f.name}`.toLowerCase();
+  if (/(mcdonald|wendy|burger king|chick-fil|subway|chipotle|fast food|restaurant,|pad thai|sushi roll|hard taco)/.test(blob)) return false;
+  if (/^(cheeseburger|burrito|taco|pizza)\b/.test(blob)) return false;
+  return true;
+}
+
+function shoppingListItems() {
+  const map = new Map();
+  for (const item of state.plan) {
+    const f = foodById(item.id);
+    if (!isGroceryItem(f)) continue;
+    const name = shopName(f);
+    const key = name.toLowerCase();
+    const prev = map.get(key);
+    const servings = item.servings;
+    if (prev) {
+      prev.servings = Math.round((prev.servings + servings) * 10) / 10;
+    } else {
+      map.set(key, {
+        name,
+        servings,
+        servingLabel: f.serving,
+        emoji: f.emoji,
+        id: f.id,
+      });
+    }
+  }
+  return [...map.values()];
+}
+
+function amazonSearchUrl(q) {
+  return "https://www.amazon.com/s?k=" + encodeURIComponent(q);
+}
+
+function costcoSearchUrl(q) {
+  return "https://www.costco.com/s?keyword=" + encodeURIComponent(q);
+}
+
+function buildShoppingListText() {
+  const items = shoppingListItems();
+  if (!items.length) return "Shopping list: (no grocery items on today's plan yet)";
+  const lines = ["Shopping list (from today's plan):"];
+  for (const it of items) {
+    const qty = it.servings === 1 ? "1 serving" : `${it.servings} servings`;
+    lines.push(`• ${it.name} — ${qty} (${it.servingLabel})`);
+  }
+  lines.push("");
+  lines.push("Open Amazon or Costco and paste/search these names. No cart is created for you.");
+  return lines.join("\n");
+}
+
+function buildPlanText({ includeShop = true } = {}) {
+  const p = profile();
+  const t = totals();
+  const target = dailyTarget();
+  const showM = !!(p && p.show_minerals);
+  const lines = [];
+  lines.push("Protein Planner" + (DRAFT ? " (DRAFT)" : ""));
+  lines.push("Education only — not medical advice. Follow your clinician or dietitian. Values may still be under review.");
+  lines.push("");
+  lines.push(`Profile: ${p ? p.label : "—"}`);
+  if (state.weightKg) {
+    const lb = Math.round(kgToLb(state.weightKg));
+    lines.push(`Weight: ${lb} lb (${Math.round(state.weightKg * 10) / 10} kg)`);
+  }
+  lines.push(`Daily protein target: ${target != null ? target + "g" : "—"}`);
+  lines.push("");
+  for (let i = 0; i < state.mealSlots; i++) {
+    const items = state.plan.filter((x) => (x.meal ?? 0) === i);
+    lines.push(`${mealLabel(i)}:`);
+    if (!items.length) {
+      lines.push("  (nothing added)");
+      continue;
+    }
+    for (const item of items) {
+      const f = foodById(item.id);
+      if (!f) continue;
+      const prot = Math.round(f.protein * item.servings * 10) / 10;
+      let row = `  • ${f.name} — ${item.servings}× ${f.serving} · ${prot}g protein`;
+      if (showM) {
+        row += ` · P ${Math.round(f.phosphorus * item.servings)} / K ${Math.round(f.potassium * item.servings)} / Na ${Math.round(f.sodium * item.servings)} mg`;
+      }
+      lines.push(row);
+    }
+  }
+  lines.push("");
+  lines.push(`Day total: ${t.protein}g protein` + (target != null ? ` of ${target}g target` : ""));
+  if (showM) {
+    lines.push(`Minerals: P ${t.phosphorus} mg · K ${t.potassium} mg · Na ${t.sodium} mg`);
+  }
+  if (includeShop) {
+    lines.push("");
+    lines.push(buildShoppingListText());
+  }
+  return lines.join("\n");
+}
+
+function canNativeShare() {
+  return typeof navigator !== "undefined" && typeof navigator.share === "function";
+}
+
+async function copyText(text, okMsg) {
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      flash(okMsg || "Copied.");
+      return true;
+    }
+  } catch (_) { /* fall through */ }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.left = "-9999px";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    if (ok) { flash(okMsg || "Copied."); return true; }
+  } catch (_) {}
+  flash("Copy failed — long-press to select text.");
+  return false;
+}
+
+async function nativeSharePlan() {
+  const text = buildPlanText();
+  try {
+    await navigator.share({ title: "Protein Planner — today's plan", text });
+    flash("Shared.");
+    return true;
+  } catch (err) {
+    if (err && err.name === "AbortError") return false;
+    flash("Share unavailable — try Email, Text, or Copy.");
+    return false;
+  }
+}
+
+function emailPlan() {
+  const text = buildPlanText();
+  const subject = encodeURIComponent("My Protein Planner day");
+  const body = encodeURIComponent(text);
+  window.location.href = `mailto:?subject=${subject}&body=${body}`;
+}
+
+function textPlan() {
+  const text = buildPlanText();
+  // sms: body support varies; still useful on many phones
+  window.location.href = `sms:?&body=${encodeURIComponent(text)}`;
+}
+
+function openExternal(url) {
+  try {
+    window.open(url, "_blank", "noopener,noreferrer");
+  } catch (_) {
+    window.location.href = url;
+  }
+}
+
+function closeSheet() { state.sheet = null; render(); }
+
+function shareActionsRow() {
+  const hasPlan = state.plan.length > 0;
+  return el("div", { class: "shareActions", id: "shareActions" },
+    el("button", {
+      class: "btn btnPrimary btnBlock", type: "button", id: "sharePlanBtn",
+      disabled: !hasPlan,
+      onclick: () => { state.sheet = "share"; render(); },
+      text: "Share plan"
+    }),
+    el("button", {
+      class: "btn btnGhost btnBlock", type: "button", id: "shopListBtn",
+      disabled: !hasPlan,
+      onclick: () => { state.sheet = "shop"; render(); },
+      text: "Shopping list · Amazon / Costco"
+    })
+  );
+}
+
+function renderShareSheet() {
+  const text = buildPlanText();
+  return el("div", { class: "sheetScrim", id: "shareSheet", role: "dialog", "aria-label": "Share plan",
+      onclick: (e) => { if (e.target === e.currentTarget) closeSheet(); } },
+    el("div", { class: "sheet" },
+      el("div", { class: "sheetHandle", "aria-hidden": "true" }),
+      el("div", { class: "row between" },
+        el("h2", { text: "Share plan" }),
+        el("button", { class: "linkish", type: "button", id: "closeShareBtn", onclick: closeSheet, text: "Close" })
+      ),
+      el("p", { class: "muted tiny", text: "Sends from your phone only. Nothing is uploaded — no account, no tracking." }),
+      canNativeShare()
+        ? el("button", {
+            class: "btn btnPrimary btnBlock", type: "button", id: "nativeShareBtn",
+            onclick: () => nativeSharePlan(),
+            text: "Share… (Messages, Mail, and more)"
+          })
+        : null,
+      el("button", {
+        class: "btn btnGhost btnBlock", type: "button", id: "emailPlanBtn",
+        onclick: emailPlan, text: "Email"
+      }),
+      el("button", {
+        class: "btn btnGhost btnBlock", type: "button", id: "textPlanBtn",
+        onclick: textPlan, text: "Text / SMS"
+      }),
+      el("button", {
+        class: "btn btnGhost btnBlock", type: "button", id: "copyPlanBtn",
+        onclick: () => copyText(text, "Plan copied."),
+        text: "Copy plan"
+      }),
+      el("button", {
+        class: "btn btnGhost btnBlock", type: "button", id: "fromShareToShopBtn",
+        onclick: () => { state.sheet = "shop"; render(); },
+        text: "Shopping list · Amazon / Costco"
+      }),
+      el("pre", { class: "sharePreview", id: "sharePreview", text })
+    )
+  );
+}
+
+function renderShopSheet() {
+  const items = shoppingListItems();
+  const listText = buildShoppingListText();
+  const list = el("div", { class: "shopList", id: "shopList" });
+  if (!items.length) {
+    list.append(el("p", { class: "muted", text: "Add grocery foods to today's plan first. Restaurant / fast-food picks are left off this list." }));
+  } else {
+    items.forEach((it, i) => {
+      list.append(
+        el("div", { class: "shopItem", id: `shop-item-${i}` },
+          el("div", { class: "emoji", text: it.emoji }),
+          el("div", { class: "shopBody" },
+            el("div", { class: "name", text: it.name }),
+            el("div", { class: "meta", text: `${it.servings === 1 ? "1 serving" : it.servings + " servings"} · ${it.servingLabel}` })
+          ),
+          el("div", { class: "shopLinks" },
+            el("a", {
+              class: "shopLink", href: amazonSearchUrl(it.name), target: "_blank", rel: "noopener noreferrer",
+              id: `amazon-${i}`, text: "Amazon"
+            }),
+            el("a", {
+              class: "shopLink costco", href: costcoSearchUrl(it.name), target: "_blank", rel: "noopener noreferrer",
+              id: `costco-${i}`, text: "Costco"
+            })
+          )
+        )
+      );
+    });
+  }
+  return el("div", { class: "sheetScrim", id: "shopSheet", role: "dialog", "aria-label": "Shopping list",
+      onclick: (e) => { if (e.target === e.currentTarget) closeSheet(); } },
+    el("div", { class: "sheet" },
+      el("div", { class: "sheetHandle", "aria-hidden": "true" }),
+      el("div", { class: "row between" },
+        el("h2", { text: "Shopping list" }),
+        el("button", { class: "linkish", type: "button", id: "closeShopBtn", onclick: closeSheet, text: "Close" })
+      ),
+      el("p", { class: "muted tiny", text: "Opens Amazon or Costco search in a new tab. We do not add to a cart, sign you in, or send your list anywhere." }),
+      items.length ? el("div", { class: "shareActions" },
+        el("button", {
+          class: "btn btnPrimary btnBlock", type: "button", id: "shopAmazonTopBtn",
+          onclick: () => openExternal(amazonSearchUrl(items[0].name)),
+          text: "Shop at Amazon"
+        }),
+        el("button", {
+          class: "btn btnGhost btnBlock", type: "button", id: "shopCostcoTopBtn",
+          onclick: () => openExternal(costcoSearchUrl(items[0].name)),
+          text: "Shop at Costco"
+        })
+      ) : null,
+      list,
+      el("button", {
+        class: "btn btnGhost btnBlock", type: "button", id: "copyShopBtn",
+        disabled: !items.length,
+        onclick: () => copyText(listText, "List copied."),
+        text: "Copy list"
+      }),
+      canNativeShare() ? el("button", {
+        class: "btn btnGhost btnBlock", type: "button", id: "shareShopBtn",
+        disabled: !items.length,
+        onclick: async () => {
+          try {
+            await navigator.share({ title: "Protein Planner shopping list", text: listText });
+            flash("Shared.");
+          } catch (err) {
+            if (!(err && err.name === "AbortError")) flash("Share unavailable — use Copy list.");
+          }
+        },
+        text: "Share list"
+      }) : null,
+      el("button", {
+        class: "btn btnGhost btnBlock", type: "button", id: "fromShopToShareBtn",
+        onclick: () => { state.sheet = "share"; render(); },
+        text: "Share full plan"
+      })
+    )
+  );
 }
 
 function plateRing(pct, hit) {
@@ -707,8 +1086,9 @@ function renderAddTab() {
       el("div", { class: "card celebrate", id: "doneCard" },
         el("div", { class: "celebEmoji", text: "🎉" }),
         el("h2", { text: "You finished today's plan" }),
-        el("p", { class: "muted", text: "Nice work. Come back tomorrow — or tweak a meal on Plate." }),
-        el("button", { class: "btn btnPrimary btnBlock", type: "button", id: "viewPlateBtn",
+        el("p", { class: "muted", text: "Nice work. Share your plan, or send a grocery list to Amazon or Costco." }),
+        shareActionsRow(),
+        el("button", { class: "btn btnGhost btnBlock", type: "button", id: "viewPlateBtn",
           onclick: () => { state.tab = "plate"; render(); }, text: "See your plate" })
       )
     );
@@ -798,7 +1178,12 @@ function renderAddTab() {
         oninput: (e) => { state.query = e.target.value; state.filter = "for-you"; render(); }
       }),
       list
-    )
+    ),
+    state.plan.length ? el("div", { class: "card", id: "shareCard" },
+      el("div", { class: "suggestLabel", text: "Share & shop" }),
+      el("p", { class: "muted tiny", text: "Email, text, or copy today's plan — or open Amazon / Costco search for groceries." }),
+      shareActionsRow()
+    ) : null
   );
 }
 
@@ -843,7 +1228,11 @@ function renderPlateTab() {
         state.plan.length ? el("button", { class: "linkish danger", type: "button", id: "clearPlanBtn", onclick: clearPlan, text: "Clear" }) : null
       ),
       list
-    )
+    ),
+    state.plan.length ? el("div", { class: "card", id: "shareCardPlate" },
+      el("div", { class: "suggestLabel", text: "Share & shop" }),
+      shareActionsRow()
+    ) : null
   );
 }
 
@@ -917,6 +1306,8 @@ function render() {
     : state.screen === "setup" ? renderSetup()
     : renderPlay();
   for (const part of parts) app.append(part);
+  if (state.sheet === "share") app.append(renderShareSheet());
+  else if (state.sheet === "shop") app.append(renderShopSheet());
 
   if (keepSearch) {
     const next = document.getElementById("foodSearch");
@@ -941,4 +1332,4 @@ if ("serviceWorker" in navigator) {
   });
 }
 
-window.__PP = { state, dailyTarget, totals, suggestedTarget, profile, addFood, changeServings, changeServingsAt, save, render, relevanceScore, profileScore, mealFitScore, healthyProteinBoost, activeMealRole, perMealTarget, mealProtein, defaultMealSlots, mealComplete, dayComplete, suggestForMeal, nextOpenMeal, mealLabel, filteredFoods, shakeFoods };
+window.__PP = { state, dailyTarget, totals, suggestedTarget, profile, addFood, changeServings, changeServingsAt, save, render, relevanceScore, profileScore, mealFitScore, healthyProteinBoost, activeMealRole, perMealTarget, mealProtein, defaultMealSlots, mealComplete, dayComplete, suggestForMeal, nextOpenMeal, mealLabel, filteredFoods, shakeFoods, buildPlanText, buildShoppingListText, shoppingListItems, shopName, isGroceryItem, amazonSearchUrl, costcoSearchUrl, canNativeShare };
