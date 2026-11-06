@@ -326,7 +326,7 @@ function profileScore(f) {
   }
   if (state.foodSet === "desi") {
     let score = pro;
-    if (["moong", "lentils", "chickpeas", "kidney-beans", "toor", "lobia", "urad", "paneer", "greek-yogurt", "tofu-firm", "peanuts", "idli", "dosa-plain", "buttermilk"].includes(f.id)) score += 10;
+    if (["moong", "lentils", "chickpeas", "kidney-beans", "toor", "lobia", "urad", "paneer", "palak-paneer", "dal", "sambar", "split-peas", "greek-yogurt", "tofu-firm", "tofu-extra-firm", "peanuts", "idli", "dosa-plain", "paratha", "buttermilk", "yogurt-skim"].includes(f.id)) score += 10;
     if (f.cat === "plant" || f.cat === "dairy") score += 4;
     if (f.id.startsWith("shake-")) score += 3;
     return score;
@@ -347,27 +347,30 @@ function healthyProteinBoost(f, role) {
   const set = state.foodSet;
   const id = f.id;
   const isYogurt = id === "greek-yogurt" || id === "greek-yogurt-lowfat" || id === "greek-yogurt-whole"
-    || id === "yogurt-lf" || id === "yogurt-whole" || id === "buttermilk";
-  const isCottage = id === "cottage" || id === "cottage-1pct";
+    || id === "yogurt-lf" || id === "yogurt-whole" || id === "yogurt-skim" || id === "buttermilk";
+  const isCottage = id === "cottage" || id === "cottage-1pct" || id === "cottage-nonfat"
+    || id === "cottage-creamed" || id === "ricotta-skim" || id === "ricotta-whole";
   const isWholeProtein = [
-    "chicken-breast", "turkey-breast", "tofu-firm", "tempeh", "paneer",
-    "lentils", "chickpeas", "moong", "black-beans", "kidney-beans", "toor", "lobia", "urad", "edamame"
+    "chicken-breast", "turkey-breast", "chicken-drumstick", "chicken-dark", "ground-turkey",
+    "chicken-rotisserie-breast", "tofu-firm", "tofu-extra-firm", "tempeh", "paneer", "palak-paneer",
+    "lentils", "chickpeas", "moong", "black-beans", "kidney-beans", "toor", "lobia", "urad",
+    "edamame", "dal", "split-peas", "white-beans", "navy-beans", "pinto-beans", "natto", "veggie-burger"
   ].includes(id);
   const isQuinoa = id === "quinoa";
 
   if (role === "breakfast") {
     if (set !== "desi") {
-      if (id === "egg") return 90;          // eggs lead US + lacto-ovo veg
-      if (id === "egg-white") return 80;
+      if (id === "egg" || id === "egg-scrambled" || id === "egg-fried" || id === "egg-omelet") return 90;
+      if (id === "egg-white" || id === "egg-substitute") return 80;
       if (isYogurt) return 55;              // then yogurt
       if (isCottage) return 48;             // then other whole-food dairy
       return 0;
     }
-    // Desi lacto-only: yogurt/dahi, moong, idli/dosa, paneer/tofu — no eggs
+    // Desi lacto-only: yogurt/dahi, moong, idli/dosa/paratha, paneer/tofu/dal — no eggs
     if (isYogurt) return 40;
     if (id === "moong" || id === "moong-sprouts") return 28;
-    if (id === "idli" || id === "dosa-plain") return 26;
-    if (id === "paneer" || id === "tofu-firm") return 22;
+    if (id === "idli" || id === "dosa-plain" || id === "paratha") return 26;
+    if (id === "paneer" || id === "tofu-firm" || id === "tofu-extra-firm" || id === "dal") return 22;
     return 0;
   }
 
