@@ -160,23 +160,23 @@ function mealLeft(i) {
 function suggestForMeal(n) {
   const left = mealLeft(state.activeMeal);
   if (left == null || left <= 0) return [];
-  const pool = CONTENT.foods
-    .filter((f) => (f.sets || ["us"]).includes(state.foodSet))
-    .slice()
-    .sort((a, b) => relevanceScore(b) - relevanceScore(a));
-  // Prefer foods close to remaining grams (not huge overshoot)
+  const role = activeMealRole();
+  const q = state.query.trim().toLowerCase();
+  const searchingFish = q.includes("fish") || q.includes("salmon") || q.includes("tilapia") || q.includes("tuna") || q.includes("cod") || q.includes("shrimp");
+  const pool = CONTENT.foods.filter((f) => (f.sets || ["us"]).includes(state.foodSet));
+  // Prefer meal-tagged foods; if too few, allow careful lunch↔dinner fallback (already in mealFitScore)
   const scored = pool.map((f) => {
     const over = Math.max(0, f.protein - left);
-    return { f, score: relevanceScore(f) - over * 0.5 + (f.protein <= left * 1.15 ? 5 : 0) };
+    const fit = mealFitScore(f, role);
+    return {
+      f,
+      score: relevanceScore(f, role) - over * 0.5 + (f.protein <= left * 1.15 ? 5 : 0) + (fit >= 50 ? 8 : 0),
+    };
   });
   scored.sort((a, b) => b.score - a.score);
-  const out = [];
-  for (const { f } of scored) {
-    if (out.find((x) => x.id === f.id)) continue;
-    out.push(f);
-    if (out.length >= n) break;
-  }
-  return out;
+  // Drop hard rejects (fish/meats at breakfast/snack) unless searching
+  const filtered = searchingFish ? scored : scored.filter(({ f, score }) => mealFitScore(f, role) > -90);
+  return pickDiverse(filtered, n, searchingFish);
 }
 
 function nextOpenMeal() {
@@ -274,12 +274,46 @@ function clearAll() {
   render();
 }
 
-/** Rank foods for the active profile using existing USDA numbers only (no new nutrient inventing). */
-function relevanceScore(f) {
+/** Current meal slot → breakfast | lunch | dinner | snack */
+function activeMealRole() {
+  const label = mealLabel(state.activeMeal).toLowerCase();
+  if (label.startsWith("breakfast")) return "breakfast";
+  if (label.startsWith("lunch")) return "lunch";
+  if (label.startsWith("dinner")) return "dinner";
+  if (label.startsWith("snack")) return "snack";
+  return "dinner"; // Meal 4+ without snack naming → dinner-like
+}
+
+function mealsOf(f) {
+  return Array.isArray(f.meals) && f.meals.length ? f.meals : null;
+}
+
+function isDinnerMeatOrFish(f) {
+  if (f.cat === "fish") return true;
+  if (f.cat === "meat" && f.id !== "ham-deli") return true;
+  return false;
+}
+
+/** How well a food fits the current meal. Editorial tags only — no nutrient inventing. */
+function mealFitScore(f, role) {
+  const m = mealsOf(f);
+  if (m && m.includes(role)) return 50;
+  // Never promote fish fillets / dinner meats into breakfast or snack top picks
+  if ((role === "breakfast" || role === "snack") && isDinnerMeatOrFish(f)) return -100;
+  if (!m) return 0;
+  // Careful fallbacks when the active set is thin for this slot
+  if (role === "lunch" && m.includes("dinner")) return 14;
+  if (role === "dinner" && m.includes("lunch")) return 14;
+  if (role === "breakfast" && m.includes("snack")) return 10;
+  if (role === "snack" && m.includes("breakfast")) return 10;
+  return -25;
+}
+
+/** Profile ranking using existing USDA numbers only (no new nutrient inventing). */
+function profileScore(f) {
   const pid = state.profileId;
   const pro = Math.max(0.1, f.protein);
   if (pid === "ckd" || pid === "dialysis") {
-    // Prefer higher protein with lower P / K / Na burden. Education sort only.
     const burden = 1 + f.phosphorus / 200 + f.potassium / 400 + f.sodium / 400;
     let score = pro / burden;
     if (f.id === "egg-white" || f.id === "chicken-breast" || f.id === "cod" || f.id === "turkey-breast" || f.id === "greek-yogurt") score += 8;
@@ -287,37 +321,65 @@ function relevanceScore(f) {
     if (f.sodium >= 400) score -= 5;
     if (f.potassium >= 400) score -= 3;
     if (f.phosphorus >= 250 && f.protein < 15) score -= 2;
-    if (pid === "dialysis" && pro >= 15) score += 2; // dialysis needs more protein density
+    if (pid === "dialysis" && pro >= 15) score += 2;
     return score;
   }
   if (state.foodSet === "desi") {
     let score = pro;
-    if (["moong", "lentils", "chickpeas", "kidney-beans", "toor", "lobia", "urad", "paneer", "greek-yogurt", "tofu-firm", "peanuts"].includes(f.id)) score += 10;
+    if (["moong", "lentils", "chickpeas", "kidney-beans", "toor", "lobia", "urad", "paneer", "greek-yogurt", "tofu-firm", "peanuts", "idli", "dosa-plain", "buttermilk"].includes(f.id)) score += 10;
     if (f.cat === "plant" || f.cat === "dairy") score += 4;
     if (f.id.startsWith("shake-")) score += 3;
     return score;
   }
-  // Everyday US: lean proteins, fish, shakes, bars near the top
+  // Everyday US / veg: lean proteins, dairy, eggs, shakes — not a fish-first list
   let score = pro;
-  if (["meat", "fish", "egg", "dairy", "plant", "supplement", "bar"].includes(f.cat)) score += 5;
-  if (f.cat === "fish") score += 8; // keep seafood easy to find
-  if (["tilapia","salmon","tuna-canned","tuna-fresh","cod","shrimp","catfish","trout","sardines-oil"].includes(f.id)) score += 6;
-  if (f.id.startsWith("shake-") || f.cat === "bar") score += 6;
-  if (f.restaurant) score += 2;
+  if (["meat", "egg", "dairy", "plant", "supplement", "bar"].includes(f.cat)) score += 5;
+  if (f.cat === "fish") score += 2; // fine for dinner, not a global boost
+  if (f.id.startsWith("shake-") || f.cat === "bar") score += 4;
+  if (f.restaurant) score += 1;
   if (f.cat === "fruit" || f.cat === "veg") score -= 2;
   return score;
 }
 
+/** Combined meal-first + profile ranking. */
+function relevanceScore(f, role) {
+  const r = role || activeMealRole();
+  return mealFitScore(f, r) + profileScore(f);
+}
+
+/** Cap fish at 1 in top picks; prefer mixed categories. */
+function pickDiverse(scored, n, searchingFish) {
+  const out = [];
+  const usedCats = new Set();
+  let fishCount = 0;
+  const tryAdd = (preferNewCat) => {
+    for (const { f } of scored) {
+      if (out.length >= n) break;
+      if (out.find((x) => x.id === f.id)) continue;
+      const isFish = f.cat === "fish";
+      if (isFish && fishCount >= 1 && !searchingFish) continue;
+      if (preferNewCat && usedCats.has(f.cat) && usedCats.size < n) continue;
+      out.push(f);
+      usedCats.add(f.cat);
+      if (isFish) fishCount += 1;
+    }
+  };
+  tryAdd(true);
+  tryAdd(false);
+  return out;
+}
+
 function filteredFoods() {
   const q = state.query.trim().toLowerCase();
+  const role = activeMealRole();
   let list = CONTENT.foods.filter((f) => (f.sets || ["us"]).includes(state.foodSet));
   if (state.filter === "for-you") {
-    list.sort((a, b) => relevanceScore(b) - relevanceScore(a));
+    list.sort((a, b) => relevanceScore(b, role) - relevanceScore(a, role));
   } else if (state.filter !== "all") {
     list = list.filter((f) => f.cat === state.filter);
-    list.sort((a, b) => b.protein - a.protein);
+    list.sort((a, b) => relevanceScore(b, role) - relevanceScore(a, role));
   } else {
-    list.sort((a, b) => b.protein - a.protein);
+    list.sort((a, b) => relevanceScore(b, role) - relevanceScore(a, role));
   }
   if (q) list = list.filter((f) => (f.name + " " + f.serving + " " + f.cat).toLowerCase().includes(q));
   return list;
@@ -385,7 +447,7 @@ function mealChips(editable) {
     const done = mealComplete(i);
     row.append(el("button", {
       type: "button",
-      class: "mealChip" + (state.activeMeal === i ? " on" : "") + (done ? " filled" : ""),
+      class: "mealChip role-" + mealLabel(i).toLowerCase().split(" ")[0] + (state.activeMeal === i ? " on" : "") + (done ? " filled" : ""),
       id: `meal-${i}`,
       onclick: () => { state.activeMeal = i; state.tab = "add"; render(); },
       html: `<b>${mealLabel(i)}</b><span>${done ? "✓" : (per ? `${got}/${per}g` : `${got}g`)}</span>`
@@ -583,6 +645,7 @@ function renderAddTab() {
     return el("div", {},
       progressHero(),
       el("div", { class: "card celebrate", id: "doneCard" },
+        el("div", { class: "celebEmoji", text: "🎉" }),
         el("h2", { text: "You finished today's plan" }),
         el("p", { class: "muted", text: "Nice work. Come back tomorrow — or tweak a meal on Plate." }),
         el("button", { class: "btn btnPrimary btnBlock", type: "button", id: "viewPlateBtn",
@@ -591,13 +654,18 @@ function renderAddTab() {
     );
   }
 
+  const role = activeMealRole();
+  const roleEmoji = { breakfast: "🌅", lunch: "☀️", dinner: "🌙", snack: "🍎" }[role] || "🍽️";
   const guide = el("div", { class: "card guide" },
     el("div", { class: "row between" },
-      el("h2", { text: mealLabel(state.activeMeal) }),
+      el("div", { class: "mealHeading" },
+        el("span", { class: "mealBadge", text: `${roleEmoji} ${mealLabel(state.activeMeal)}` }),
+        left != null && !mealDone ? el("div", { class: "leftCue", html: `<b>${left}g</b> left for this meal` }) : null
+      ),
       setSwitch()
     ),
     mealDone
-      ? el("div", {},
+      ? el("div", { class: "nextMealBlock" },
           el("p", { class: "statusLine good", text: "This meal's protein share is filled." }),
           el("button", {
             class: "btn btnPrimary btnBlock", type: "button", id: "nextMealBtn",
@@ -610,18 +678,18 @@ function renderAddTab() {
           })
         )
       : el("div", {},
-          el("p", { class: "muted", text: left != null ? `${left}g to go — tap a pick` : "Pick a food" }),
+          el("div", { class: "suggestLabel", text: "Top picks for this meal" }),
           el("div", { class: "suggestRow", id: "suggestRow" },
             ...suggestions.map((f) => el("button", {
               type: "button", class: "suggestCardBtn", id: `sug-${f.id}`,
               onclick: () => addFood(f.id),
-              html: `<span class="emoji">${f.emoji}</span><span class="name">${f.name}</span><span class="meta"><b>${f.protein}g</b></span>`
+              html: `<span class="emoji">${f.emoji}</span><span class="sugBody"><span class="name">${f.name}</span><span class="sugServing">${f.serving}</span></span><span class="sugProt"><b>${f.protein}g</b><span>Add</span></span>`
             }))
           ),
           suggestions.length ? el("button", {
             class: "btn btnGhost btnBlock", type: "button", id: "fillMealBtn",
             onclick: () => { if (suggestions[0]) addFood(suggestions[0].id); },
-            text: `Add ${suggestions[0].emoji} ${suggestions[0].name}`
+            text: `Quick-add ${suggestions[0].emoji} ${suggestions[0].name}`
           }) : null
         )
   );
@@ -778,4 +846,4 @@ if ("serviceWorker" in navigator) {
   });
 }
 
-window.__PP = { state, dailyTarget, totals, suggestedTarget, profile, addFood, changeServings, changeServingsAt, save, render, relevanceScore, perMealTarget, mealProtein, defaultMealSlots, mealComplete, dayComplete, suggestForMeal, nextOpenMeal };
+window.__PP = { state, dailyTarget, totals, suggestedTarget, profile, addFood, changeServings, changeServingsAt, save, render, relevanceScore, profileScore, mealFitScore, activeMealRole, perMealTarget, mealProtein, defaultMealSlots, mealComplete, dayComplete, suggestForMeal, nextOpenMeal, mealLabel, filteredFoods };
