@@ -535,6 +535,7 @@ function renderAddTab() {
     ["egg", "Eggs"],
     ["dairy", "Dairy"],
     ["plant", "Plant"],
+    ["bar", "Bars"],
     ["restaurant", "Out"],
   ];
   const chips = el("div", { class: "chips", id: "catChips" },
