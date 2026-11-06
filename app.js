@@ -341,20 +341,60 @@ function profileScore(f) {
   return score;
 }
 
-/** Everyday US / lacto-ovo veg: hard-boiled egg leads breakfast, then egg white.
- *  Desi is lacto-only — never boost eggs there. Editorial ranking only; no new nutrients. */
-function breakfastEggBoost(f, role) {
-  if (role !== "breakfast") return 0;
-  if (state.foodSet === "desi") return 0;
-  if (f.id === "egg") return 80; // usual breakfast egg first
-  if (f.id === "egg-white") return 70; // other egg prep next
+/** Editorial boosts so eggs / yogurt / quinoa / whole-food proteins lead over shakes & bars.
+ *  No new nutrient inventing. Desi never boosts eggs. */
+function healthyProteinBoost(f, role) {
+  const set = state.foodSet;
+  const id = f.id;
+  const isYogurt = id === "greek-yogurt" || id === "greek-yogurt-lowfat" || id === "greek-yogurt-whole"
+    || id === "yogurt-lf" || id === "yogurt-whole" || id === "buttermilk";
+  const isCottage = id === "cottage" || id === "cottage-1pct";
+  const isWholeProtein = [
+    "chicken-breast", "turkey-breast", "tofu-firm", "tempeh", "paneer",
+    "lentils", "chickpeas", "moong", "black-beans", "kidney-beans", "toor", "lobia", "urad", "edamame"
+  ].includes(id);
+  const isQuinoa = id === "quinoa";
+
+  if (role === "breakfast") {
+    if (set !== "desi") {
+      if (id === "egg") return 90;          // eggs lead US + lacto-ovo veg
+      if (id === "egg-white") return 80;
+      if (isYogurt) return 55;              // then yogurt
+      if (isCottage) return 48;             // then other whole-food dairy
+      return 0;
+    }
+    // Desi lacto-only: yogurt/dahi, moong, idli/dosa, paneer/tofu — no eggs
+    if (isYogurt) return 40;
+    if (id === "moong" || id === "moong-sprouts") return 28;
+    if (id === "idli" || id === "dosa-plain") return 26;
+    if (id === "paneer" || id === "tofu-firm") return 22;
+    return 0;
+  }
+
+  if (role === "lunch" || role === "dinner") {
+    if (isYogurt) return 42;
+    if (isQuinoa) return 40; // quinoa already tagged lunch/dinner; boost existing record
+    if (isCottage) return 36;
+    if (isWholeProtein) return 34;
+    if (set !== "desi" && (id === "egg" || id === "egg-white")) return 28;
+    // Mild demote of shakes/bars so they don't steal top-pick slots from whole foods
+    if (id.startsWith("shake-") || f.cat === "supplement" || f.cat === "bar") return -12;
+    return 0;
+  }
+
+  // Snack: keep shakes/bars usable but prefer yogurt/cottage slightly
+  if (role === "snack") {
+    if (isYogurt) return 20;
+    if (isCottage) return 16;
+    return 0;
+  }
   return 0;
 }
 
 /** Combined meal-first + profile ranking. */
 function relevanceScore(f, role) {
   const r = role || activeMealRole();
-  return mealFitScore(f, r) + profileScore(f) + breakfastEggBoost(f, r);
+  return mealFitScore(f, r) + profileScore(f) + healthyProteinBoost(f, r);
 }
 
 /** Cap fish at 1 in top picks; prefer mixed categories. */
@@ -644,6 +684,13 @@ function renderSetup() {
   )];
 }
 
+function shakeFoods() {
+  return CONTENT.foods.filter((f) =>
+    (f.sets || ["us"]).includes(state.foodSet)
+    && (f.id.startsWith("shake-") || f.id === "protein-shake-rtd")
+  ).sort((a, b) => b.protein - a.protein);
+}
+
 function renderAddTab() {
   const showM = profile()?.show_minerals;
   const done = dayComplete();
@@ -722,12 +769,28 @@ function renderAddTab() {
     );
   });
 
+  const shakes = shakeFoods();
+  const shakeRow = (!mealDone && shakes.length && !state.query)
+    ? el("div", { class: "card shakeCard", id: "shakeSection" },
+        el("div", { class: "suggestLabel", text: "Protein shakes" }),
+        el("p", { class: "muted tiny", text: "Ready-to-drink options for this food set — tap to add." }),
+        el("div", { class: "shakeRow", id: "shakeRow" },
+          ...shakes.map((f) => el("button", {
+            type: "button", class: "shakeChip", id: `shake-${f.id}`,
+            onclick: () => addFood(f.id),
+            html: `<span class="emoji">${f.emoji}</span><span class="shakeName">${f.name.replace(/ shake.*$/i, "").replace(/,.*$/, "")}</span><span class="shakeProt">${f.protein}g</span>`
+          }))
+        )
+      )
+    : null;
+
   return el("div", {},
     progressHero(),
     guide,
+    shakeRow,
     mealDone ? null : el("div", { class: "card" },
       el("input", {
-        type: "search", id: "foodSearch", placeholder: "Search more foods…",
+        type: "search", id: "foodSearch", placeholder: "Search shakes, yogurt, bars…",
         value: state.query,
         oninput: (e) => { state.query = e.target.value; state.filter = "for-you"; render(); }
       }),
@@ -821,6 +884,12 @@ function renderPlay() {
 }
 
 function render() {
+  // Preserve search focus/caret across full re-renders (typing must not feel like a refresh)
+  const prevSearch = document.getElementById("foodSearch");
+  const keepSearch = prevSearch && document.activeElement === prevSearch;
+  const selStart = keepSearch ? prevSearch.selectionStart : null;
+  const selEnd = keepSearch ? prevSearch.selectionEnd : null;
+
   const app = document.getElementById("app");
   app.innerHTML = "";
   app.append(
@@ -845,6 +914,19 @@ function render() {
     : state.screen === "setup" ? renderSetup()
     : renderPlay();
   for (const part of parts) app.append(part);
+
+  if (keepSearch) {
+    const next = document.getElementById("foodSearch");
+    if (next) {
+      next.focus();
+      try {
+        const len = next.value.length;
+        const a = selStart == null ? len : Math.min(selStart, len);
+        const b = selEnd == null ? len : Math.min(selEnd, len);
+        next.setSelectionRange(a, b);
+      } catch (_) {}
+    }
+  }
 }
 
 load();
@@ -856,4 +938,4 @@ if ("serviceWorker" in navigator) {
   });
 }
 
-window.__PP = { state, dailyTarget, totals, suggestedTarget, profile, addFood, changeServings, changeServingsAt, save, render, relevanceScore, profileScore, mealFitScore, breakfastEggBoost, activeMealRole, perMealTarget, mealProtein, defaultMealSlots, mealComplete, dayComplete, suggestForMeal, nextOpenMeal, mealLabel, filteredFoods };
+window.__PP = { state, dailyTarget, totals, suggestedTarget, profile, addFood, changeServings, changeServingsAt, save, render, relevanceScore, profileScore, mealFitScore, healthyProteinBoost, activeMealRole, perMealTarget, mealProtein, defaultMealSlots, mealComplete, dayComplete, suggestForMeal, nextOpenMeal, mealLabel, filteredFoods, shakeFoods };

@@ -218,6 +218,16 @@
   @media (prefers-reduced-motion: reduce){
     .toast, .celebEmoji, .plateFill, .suggestCardBtn, .profileBtn { animation:none; transition:none; }
   }
+
+  .shakeCard{ padding:.85rem 1rem 1rem; }
+  .shakeRow{ display:flex; flex-wrap:wrap; gap:.4rem; margin-top:.55rem; }
+  .shakeChip{ display:inline-flex; align-items:center; gap:.35rem; border:1.5px solid #fdba74; background:linear-gradient(145deg,#fff7ed,#ffedd5);
+    border-radius:999px; padding:.35rem .7rem; font-weight:700; font-size:.78rem; color:var(--ink); cursor:pointer; }
+  .shakeChip .emoji{ font-size:1rem; }
+  .shakeChip .shakeName{ max-width:9.5rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .shakeChip .shakeProt{ color:#c2410c; font-weight:900; }
+  .shakeChip:active{ transform:scale(.97); }
+
 </style>
 </head>
 <body>
