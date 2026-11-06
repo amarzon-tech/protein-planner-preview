@@ -1,6 +1,6 @@
 /* Protein Planner service worker: precache shell for offline use.
    Bump CACHE_VERSION whenever any cached file changes. */
-const CACHE_VERSION = "protein-planner-v0.3.6-draft";
+const CACHE_VERSION = "protein-planner-v0.3.7-draft";
 const ASSETS = [
   "./",
   "./index.html",

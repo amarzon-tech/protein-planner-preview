@@ -361,10 +361,13 @@ function healthyProteinBoost(f, role) {
 
   if (role === "breakfast") {
     if (set !== "desi") {
-      if (id === "egg" || id === "egg-scrambled" || id === "egg-fried" || id === "egg-omelet") return 90;
-      if (id === "egg-white" || id === "egg-substitute") return 80;
+      // Lead: hard-boiled, then whites/substitute. Skillet eggs stay searchable but do not lead.
+      if (id === "egg") return 90;
+      if (id === "egg-white") return 80;
+      if (id === "egg-substitute") return 78;
       if (isYogurt) return 55;              // then yogurt
       if (isCottage) return 48;             // then other whole-food dairy
+      if (id === "egg-scrambled" || id === "egg-fried" || id === "egg-omelet") return 12; // after yogurt/cottage
       return 0;
     }
     // Desi lacto-only: yogurt/dahi, moong, idli/dosa/paratha, paneer/tofu/dal — no eggs
