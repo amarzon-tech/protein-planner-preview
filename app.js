@@ -251,11 +251,13 @@ function relevanceScore(f) {
     if (f.id.startsWith("shake-")) score += 3;
     return score;
   }
-  // General / US: everyday protein picks + familiar restaurant items near the top
+  // Everyday US: lean proteins, fish, shakes, bars near the top
   let score = pro;
-  if (["meat", "fish", "egg", "dairy", "plant", "supplement"].includes(f.cat)) score += 5;
-  if (f.id.startsWith("shake-")) score += 6;
-  if (f.restaurant) score += 3;
+  if (["meat", "fish", "egg", "dairy", "plant", "supplement", "bar"].includes(f.cat)) score += 5;
+  if (f.cat === "fish") score += 8; // keep seafood easy to find
+  if (["tilapia","salmon","tuna-canned","tuna-fresh","cod","shrimp","catfish","trout","sardines-oil"].includes(f.id)) score += 6;
+  if (f.id.startsWith("shake-") || f.cat === "bar") score += 6;
+  if (f.restaurant) score += 2;
   if (f.cat === "fruit" || f.cat === "veg") score -= 2;
   return score;
 }
