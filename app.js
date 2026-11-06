@@ -1,6 +1,6 @@
 /* Protein Planner — DRAFT. Offline, no login, no ads. Local storage only. */
 const DRAFT = true; // set false after Dr D signs off CONTENT_REVIEW.md
-const STORE_KEY = "protein-planner-v1";
+const STORE_KEY = "protein-planner-v2";
 
 const CHEERS = [
   "Plate looking good.",
@@ -46,7 +46,10 @@ const state = {
   targetMode: "suggested",
   customTarget: null,
   gPerKg: null,
-  plan: [],
+  foodSet: "us",
+  mealSlots: 3, // total eating times 2–6 (meals + snacks)
+  activeMeal: 0,
+  plan: [], // {id, servings, meal}
   filter: "for-you",
   query: "",
   flash: "",
@@ -67,7 +70,10 @@ function load() {
       targetMode: s.targetMode || "suggested",
       customTarget: s.customTarget ?? null,
       gPerKg: s.gPerKg ?? null,
-      plan: Array.isArray(s.plan) ? s.plan : [],
+      foodSet: s.foodSet === "desi" ? "desi" : "us",
+      mealSlots: Math.min(6, Math.max(2, s.mealSlots || 3)),
+      activeMeal: s.activeMeal || 0,
+      plan: Array.isArray(s.plan) ? s.plan.map(x => ({id: x.id, servings: x.servings, meal: x.meal ?? 0})) : [],
       screen: s.profileId ? ((s.weightKg || s.customTarget) ? "play" : "setup") : "profile",
       tab: "add",
     });
@@ -84,6 +90,9 @@ function save() {
       targetMode: state.targetMode,
       customTarget: state.customTarget,
       gPerKg: state.gPerKg,
+      foodSet: state.foodSet,
+      mealSlots: state.mealSlots,
+      activeMeal: state.activeMeal,
       plan: state.plan,
     }));
   } catch (_) { /* ignore */ }
@@ -103,6 +112,38 @@ function dailyTarget() {
 }
 
 function foodById(id) { return CONTENT.foods.find((f) => f.id === id); }
+
+function defaultMealSlots() {
+  const d = (CONTENT.mealDefaults || {})[state.profileId];
+  if (!d) return 3;
+  return Math.min(6, Math.max(2, (d.meals || 3) + (d.snacks || 0)));
+}
+
+function mealLabel(i) {
+  const d = (CONTENT.mealDefaults || {})[state.profileId] || { meals: 3, snacks: 0 };
+  if (i < (d.meals || 3) || state.mealSlots <= (d.meals || 3)) {
+    const names = ["Breakfast", "Lunch", "Dinner", "Meal 4", "Meal 5", "Meal 6"];
+    return names[i] || `Meal ${i + 1}`;
+  }
+  return `Snack ${i - (d.meals || 3) + 1}`;
+}
+
+function perMealTarget() {
+  const t = dailyTarget();
+  if (!t || !state.mealSlots) return null;
+  return Math.round((t / state.mealSlots) * 10) / 10;
+}
+
+function mealProtein(i) {
+  let p = 0;
+  for (const item of state.plan) {
+    if ((item.meal ?? 0) !== i) continue;
+    const f = foodById(item.id);
+    if (f) p += f.protein * item.servings;
+  }
+  return Math.round(p * 10) / 10;
+}
+
 
 function totals() {
   let protein = 0, phosphorus = 0, potassium = 0, sodium = 0;
@@ -146,8 +187,8 @@ function flash(msg) {
 function addFood(id) {
   const before = dailyTarget() ? totals().protein / dailyTarget() : 0;
   const existing = state.plan.find((x) => x.id === id);
-  if (existing) existing.servings += 1;
-  else state.plan.push({ id, servings: 1 });
+  if (existing && (existing.meal ?? 0) === state.activeMeal) existing.servings += 1;
+  else state.plan.push({ id, servings: 1, meal: state.activeMeal });
   save();
   const after = dailyTarget() ? totals().protein / dailyTarget() : 0;
   if (dailyTarget() && before < 1 && after >= 1) flash(HIT_LINES[Math.floor(Math.random() * HIT_LINES.length)]);
@@ -156,10 +197,20 @@ function addFood(id) {
 }
 
 function changeServings(id, delta) {
-  const item = state.plan.find((x) => x.id === id);
+  const item = state.plan.find((x) => x.id === id && (x.meal ?? 0) === state.activeMeal)
+    || state.plan.find((x) => x.id === id);
   if (!item) return;
   item.servings = Math.round((item.servings + delta) * 10) / 10;
-  if (item.servings <= 0) state.plan = state.plan.filter((x) => x.id !== id);
+  if (item.servings <= 0) state.plan = state.plan.filter((x) => x !== item);
+  save();
+  render();
+}
+
+function changeServingsAt(idx, delta) {
+  const item = state.plan[idx];
+  if (!item) return;
+  item.servings = Math.round((item.servings + delta) * 10) / 10;
+  if (item.servings <= 0) state.plan.splice(idx, 1);
   save();
   render();
 }
@@ -170,7 +221,8 @@ function clearAll() {
   localStorage.removeItem(STORE_KEY);
   Object.assign(state, {
     screen: "profile", tab: "add", profileId: null, weightKg: null, weightUnit: "lb",
-    weightInput: "", targetMode: "suggested", customTarget: null, gPerKg: null, plan: [],
+    weightInput: "", targetMode: "suggested", customTarget: null, gPerKg: null,
+    foodSet: "us", mealSlots: 3, activeMeal: 0, plan: [],
     filter: "for-you", query: "", flash: "", showCustom: false, showSrc: null,
   });
   render();
@@ -192,9 +244,17 @@ function relevanceScore(f) {
     if (pid === "dialysis" && pro >= 15) score += 2; // dialysis needs more protein density
     return score;
   }
-  // General: everyday protein picks + familiar restaurant items near the top
+  if (state.foodSet === "desi") {
+    let score = pro;
+    if (["moong", "lentils", "chickpeas", "kidney-beans", "toor", "lobia", "urad", "paneer", "greek-yogurt", "tofu-firm", "peanuts"].includes(f.id)) score += 10;
+    if (f.cat === "plant" || f.cat === "dairy") score += 4;
+    if (f.id.startsWith("shake-")) score += 3;
+    return score;
+  }
+  // General / US: everyday protein picks + familiar restaurant items near the top
   let score = pro;
-  if (["meat", "fish", "egg", "dairy", "plant"].includes(f.cat)) score += 5;
+  if (["meat", "fish", "egg", "dairy", "plant", "supplement"].includes(f.cat)) score += 5;
+  if (f.id.startsWith("shake-")) score += 6;
   if (f.restaurant) score += 3;
   if (f.cat === "fruit" || f.cat === "veg") score -= 2;
   return score;
@@ -202,7 +262,7 @@ function relevanceScore(f) {
 
 function filteredFoods() {
   const q = state.query.trim().toLowerCase();
-  let list = CONTENT.foods.slice();
+  let list = CONTENT.foods.filter((f) => (f.sets || ["us"]).includes(state.foodSet));
   if (state.filter === "for-you") {
     list.sort((a, b) => relevanceScore(b) - relevanceScore(a));
   } else if (state.filter !== "all") {
@@ -251,6 +311,45 @@ function mineralChips(p, k, na, compact) {
   );
 }
 
+
+function setSwitch() {
+  const sets = CONTENT.foodSets || {};
+  return el("div", { class: "setSwitch", id: "setSwitch" },
+    ...Object.values(sets).map((s) => el("button", {
+      type: "button", class: "setBtn" + (state.foodSet === s.id ? " on" : ""),
+      id: `set-${s.id}`,
+      onclick: () => { state.foodSet = s.id; state.filter = "for-you"; state.query = ""; save(); render(); },
+      text: `${s.emoji} ${s.short}`
+    }))
+  );
+}
+
+function mealChips(editable) {
+  const per = perMealTarget();
+  const row = el("div", { class: "mealRow", id: "mealRow" });
+  for (let i = 0; i < state.mealSlots; i++) {
+    const got = mealProtein(i);
+    const hit = per && got >= per * 0.9;
+    row.append(el("button", {
+      type: "button",
+      class: "mealChip" + (state.activeMeal === i ? " on" : "") + (hit ? " filled" : ""),
+      id: `meal-${i}`,
+      onclick: () => { state.activeMeal = i; render(); },
+      html: `<b>${mealLabel(i)}</b><span>${got}g${per ? ` / ${per}g` : ""}</span>`
+    }));
+  }
+  if (editable) {
+    row.append(el("div", { class: "mealAdjust" },
+      el("button", { type: "button", id: "mealsMinus", disabled: state.mealSlots <= 2,
+        onclick: () => { state.mealSlots = Math.max(2, state.mealSlots - 1); if (state.activeMeal >= state.mealSlots) state.activeMeal = state.mealSlots - 1; save(); render(); }, text: "−" }),
+      el("span", { class: "tiny", text: `${state.mealSlots}×` }),
+      el("button", { type: "button", id: "mealsPlus", disabled: state.mealSlots >= 6,
+        onclick: () => { state.mealSlots = Math.min(6, state.mealSlots + 1); save(); render(); }, text: "+" })
+    ));
+  }
+  return row;
+}
+
 function progressHero() {
   const p = profile();
   const t = dailyTarget();
@@ -277,6 +376,10 @@ function progressHero() {
         el("div", { class: "statusLine" + (hit ? " good" : "") + (over ? " warn" : ""), id: "proteinStatus", text: status })
       )
     ),
+    mealChips(true),
+    el("p", { class: "tiny muted", text: perMealTarget()
+      ? `Aim ~${perMealTarget()}g protein each time · tap a meal, then add foods`
+      : "Set a target to split protein across meals" }),
     p && p.show_minerals ? el("div", { id: "mineralTotals" },
       mineralChips(tot.phosphorus, tot.potassium, tot.sodium, false),
       el("p", { class: "tiny muted", text: "Running totals — no caps set here." })
@@ -301,6 +404,8 @@ function renderProfile() {
           onclick: () => {
             state.profileId = p.id;
             state.gPerKg = p.g_per_kg_default;
+            state.mealSlots = defaultMealSlots();
+            state.activeMeal = 0;
             state.screen = "setup";
             state.showCustom = false;
             save();
@@ -392,6 +497,11 @@ function renderSetup() {
         if (go) go.disabled = !(dailyTarget() > 0);
       }
     }) : null,
+    el("div", { class: "suggestCard soft" },
+      el("div", { class: "muted tiny", text: "Eating times (draft)" }),
+      mealChips(true),
+      el("div", { class: "tiny muted", text: ((CONTENT.mealDefaults || {})[state.profileId] || {}).rationale || "Educational split — not medical advice." })
+    ),
     el("button", {
       class: "btn btnPrimary btnBlock", type: "button", id: "toPlanBtn",
       disabled: !(dailyTarget() > 0),
@@ -399,6 +509,7 @@ function renderSetup() {
         setWeightFromInput();
         if (!(dailyTarget() > 0)) return;
         state.targetMode = state.customTarget ? "custom" : "suggested";
+        if (!state.mealSlots) state.mealSlots = defaultMealSlots();
         state.screen = "play";
         state.tab = "add";
         state.filter = "for-you";
@@ -434,7 +545,7 @@ function renderAddTab() {
   );
   const list = el("div", { class: "foodList", id: "foodList" });
   const foods = filteredFoods();
-  foods.slice(0, state.filter === "for-you" ? 18 : foods.length).forEach((f, i) => {
+  foods.slice(0, state.filter === "for-you" ? (state.foodSet === "desi" ? foods.length : 24) : foods.length).forEach((f, i) => {
     list.append(
       el("div", { class: "foodItem" + (state.filter === "for-you" && i < 3 ? " featured" : "") },
         el("div", { class: "emoji", text: f.emoji }),
@@ -464,7 +575,12 @@ function renderAddTab() {
   return el("div", {},
     progressHero(),
     el("div", { class: "card" },
-      el("h2", { text: state.filter === "for-you" ? "Try these first" : "Foods" }),
+      el("div", { class: "row between" },
+        el("h2", { text: state.filter === "for-you" ? "Try these first" : "Foods" }),
+        setSwitch()
+      ),
+      state.foodSet === "desi" ? el("p", { class: "tiny muted", text: (CONTENT.foodSets.desi || {}).note || "" }) : null,
+      el("p", { class: "tiny muted", text: `Adding to ${mealLabel(state.activeMeal)}` }),
       el("input", {
         type: "search", id: "foodSearch", placeholder: "Search…",
         value: state.query,
@@ -482,15 +598,15 @@ function renderPlateTab() {
   if (!state.plan.length) {
     list.append(el("p", { class: "muted", text: "Empty plate. Grab something from Add." }));
   } else {
-    for (const item of state.plan) {
+    state.plan.forEach((item, idx) => {
       const f = foodById(item.id);
-      if (!f) continue;
+      if (!f) return;
       list.append(
         el("div", { class: "planItem", dataset: { id: f.id } },
           el("div", { class: "emoji", text: f.emoji }),
           el("div", {},
             el("div", { class: "name", text: f.name }),
-            el("div", { class: "meta", text: `${item.servings}× · ${Math.round(f.protein * item.servings * 10) / 10}g` }),
+            el("div", { class: "meta", text: `${mealLabel(item.meal ?? 0)} · ${item.servings}× · ${Math.round(f.protein * item.servings * 10) / 10}g` }),
             showM ? mineralChips(
               Math.round(f.phosphorus * item.servings),
               Math.round(f.potassium * item.servings),
@@ -499,15 +615,15 @@ function renderPlateTab() {
           ),
           el("div", {},
             el("div", { class: "qty" },
-              el("button", { type: "button", "aria-label": "Less", onclick: () => changeServings(f.id, -0.5), text: "−" }),
+              el("button", { type: "button", "aria-label": "Less", onclick: () => changeServingsAt(idx, -0.5), text: "−" }),
               el("span", { text: String(item.servings) }),
-              el("button", { type: "button", "aria-label": "More", onclick: () => changeServings(f.id, 0.5), text: "+" })
+              el("button", { type: "button", "aria-label": "More", onclick: () => changeServingsAt(idx, 0.5), text: "+" })
             ),
-            el("button", { class: "remove", type: "button", onclick: () => changeServings(f.id, -item.servings), text: "Remove" })
+            el("button", { class: "remove", type: "button", onclick: () => changeServingsAt(idx, -item.servings), text: "Remove" })
           )
         )
       );
-    }
+    });
   }
   return el("div", {},
     progressHero(),
@@ -596,4 +712,4 @@ if ("serviceWorker" in navigator) {
   });
 }
 
-window.__PP = { state, dailyTarget, totals, suggestedTarget, profile, addFood, changeServings, save, render, relevanceScore };
+window.__PP = { state, dailyTarget, totals, suggestedTarget, profile, addFood, changeServings, changeServingsAt, save, render, relevanceScore, perMealTarget, mealProtein, defaultMealSlots };
