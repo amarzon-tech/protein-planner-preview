@@ -341,10 +341,20 @@ function profileScore(f) {
   return score;
 }
 
+/** Everyday US / lacto-ovo veg: hard-boiled egg leads breakfast, then egg white.
+ *  Desi is lacto-only — never boost eggs there. Editorial ranking only; no new nutrients. */
+function breakfastEggBoost(f, role) {
+  if (role !== "breakfast") return 0;
+  if (state.foodSet === "desi") return 0;
+  if (f.id === "egg") return 80; // usual breakfast egg first
+  if (f.id === "egg-white") return 70; // other egg prep next
+  return 0;
+}
+
 /** Combined meal-first + profile ranking. */
 function relevanceScore(f, role) {
   const r = role || activeMealRole();
-  return mealFitScore(f, r) + profileScore(f);
+  return mealFitScore(f, r) + profileScore(f) + breakfastEggBoost(f, r);
 }
 
 /** Cap fish at 1 in top picks; prefer mixed categories. */
@@ -846,4 +856,4 @@ if ("serviceWorker" in navigator) {
   });
 }
 
-window.__PP = { state, dailyTarget, totals, suggestedTarget, profile, addFood, changeServings, changeServingsAt, save, render, relevanceScore, profileScore, mealFitScore, activeMealRole, perMealTarget, mealProtein, defaultMealSlots, mealComplete, dayComplete, suggestForMeal, nextOpenMeal, mealLabel, filteredFoods };
+window.__PP = { state, dailyTarget, totals, suggestedTarget, profile, addFood, changeServings, changeServingsAt, save, render, relevanceScore, profileScore, mealFitScore, breakfastEggBoost, activeMealRole, perMealTarget, mealProtein, defaultMealSlots, mealComplete, dayComplete, suggestForMeal, nextOpenMeal, mealLabel, filteredFoods };
