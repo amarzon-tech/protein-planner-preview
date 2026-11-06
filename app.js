@@ -61,7 +61,7 @@ function load() {
       targetMode: s.targetMode || "suggested",
       customTarget: s.customTarget ?? null,
       gPerKg: s.gPerKg ?? null,
-      foodSet: s.foodSet === "desi" ? "desi" : "us",
+      foodSet: ["us","veg","desi"].includes(s.foodSet) ? s.foodSet : "us",
       mealSlots: Math.min(6, Math.max(2, s.mealSlots || 3)),
       activeMeal: s.activeMeal || 0,
       plan: Array.isArray(s.plan) ? s.plan.map(x => ({id: x.id, servings: x.servings, meal: x.meal ?? 0})) : [],
