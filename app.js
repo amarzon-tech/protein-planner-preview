@@ -934,19 +934,42 @@ function progressHero() {
   );
 }
 
+/* ---------- Onboarding (v0.3.8 redesign: friendlier copy + layout only; target math unchanged) ---------- */
+const ONBOARD_COPY = {
+  ckd: { title: "CKD, not on dialysis", sub: "We'll suggest a kidney-conscious goal from your weight." },
+  dialysis: { title: "On dialysis (HD or PD)", sub: "Dialysis raises protein needs. We'll help you get there." },
+  general: { title: "General health & fitness", sub: "An everyday goal for healthy adults." },
+};
+const RATE_SOURCE = {
+  ckd: "KDOQI 2020 kidney nutrition guideline",
+  dialysis: "KDOQI 2020 kidney nutrition guideline",
+  general: "Adult RDA (National Academies)",
+};
+const CARE_NOTE = "For learning only. Your care team has the final say.";
+
+function profileTitle(p) { return (ONBOARD_COPY[p.id] || {}).title || p.label; }
+
+function mealSplitText() {
+  const per = perMealTarget();
+  if (!per) return "";
+  const d = (CONTENT.mealDefaults || {})[state.profileId] || { meals: 3, snacks: 0 };
+  const meals = Math.min(state.mealSlots, d.meals || 3);
+  const snacks = state.mealSlots - meals;
+  const what = `${meals} meal${meals === 1 ? "" : "s"}` + (snacks > 0 ? ` + ${snacks} snack${snacks === 1 ? "" : "s"}` : "");
+  return `About ${Math.round(per)} g at each of ${what}`;
+}
+
 function renderProfile() {
-  const blurbs = {
-    ckd: "A bit less protein. We'll suggest a number from your weight.",
-    dialysis: "More protein on dialysis days. We'll suggest a number from your weight.",
-    general: "Everyday protein goal from the adult RDA.",
-  };
-  return [el("div", { class: "card" },
-    el("h2", { text: "Who's this for?" }),
-    el("p", { class: "muted", text: "One tap. Then set your number." }),
-    el("div", { class: "profileGrid", id: "profileGrid" },
+  return [el("div", { class: "card onboard" },
+    el("div", { class: "stepDots", "aria-label": "Step 1 of 2" },
+      el("span", { class: "dot on" }), el("span", { class: "dot" }), el("b", { text: "Step 1 of 2" })),
+    el("h2", { class: "welcomeTitle", text: "Let's find your protein goal 👋" }),
+    el("p", { class: "welcomeSub", text: "Two quick steps, then you'll build your plate." }),
+    el("div", { class: "pickLabel", id: "pickLabel", text: "Which fits you best?" }),
+    el("div", { class: "profileGrid", id: "profileGrid", role: "list", "aria-labelledby": "pickLabel" },
       ...Object.values(CONTENT.profiles).map((p) =>
         el("button", {
-          class: "profileBtn", type: "button", id: `pick-${p.id}`,
+          class: "profileBtn" + (state.profileId === p.id ? " picked" : ""), type: "button", id: `pick-${p.id}`, role: "listitem",
           onclick: () => {
             state.profileId = p.id;
             state.gPerKg = p.g_per_kg_default;
@@ -956,100 +979,172 @@ function renderProfile() {
             state.showCustom = false;
             save();
             render();
+            const w = document.getElementById("weightInput");
+            if (w && !w.value) { try { w.focus({ preventScroll: true }); } catch (_) {} }
           }
         },
-          el("strong", { text: `${p.emoji} ${p.short}` }),
-          el("span", { text: blurbs[p.id] || p.about })
+          el("span", { class: "pIcon", "aria-hidden": "true", text: p.emoji }),
+          el("span", { class: "pText" },
+            el("strong", { text: profileTitle(p) }),
+            el("span", { text: (ONBOARD_COPY[p.id] || {}).sub || p.about })
+          ),
+          el("span", { class: "pChev", "aria-hidden": "true", text: "›" })
         )
       )
     ),
-    el("p", { class: "disclaimer", text: shortDisclaimer() })
+    el("p", { class: "careNote", text: "🔒 Stays on this device. " + CARE_NOTE })
   )];
+}
+
+/** Refresh result card, math line, and CTA in place (keeps keyboard focus while typing). */
+function updateSetupLive() {
+  const res = document.getElementById("resultCard");
+  if (res) res.replaceWith(resultCard());
+  const math = document.getElementById("suggestBox");
+  if (math) math.textContent = mathLine();
+  const go = document.getElementById("toPlanBtn");
+  if (go) go.disabled = !(dailyTarget() > 0);
+  const clr = document.getElementById("useSuggestedBtn");
+  if (clr) clr.hidden = !(state.targetMode === "custom" && state.customTarget > 0);
+}
+
+function mathLine() {
+  const p = profile();
+  if (!p) return "";
+  const s = suggestedTarget();
+  if (!s) return `Your weight × ${p.g_per_kg_default} g of protein per kg. Enter a weight to see it.`;
+  const kg = Math.round(state.weightKg * 10) / 10;
+  const from = state.weightUnit === "lb" ? `${state.weightInput} lb ≈ ${kg} kg` : `${kg} kg`;
+  return `${from} × ${state.gPerKg} g per kg = ${s} g a day`;
+}
+
+function resultCard() {
+  const t = dailyTarget();
+  const custom = state.targetMode === "custom" && state.customTarget > 0;
+  if (!t) {
+    resultCard._shown = false;
+    return el("div", { class: "resultCard empty", id: "resultCard", "aria-live": "polite" },
+      el("div", { class: "resultEmoji", "aria-hidden": "true", text: "🎯" }),
+      el("div", { class: "resultEmptyText", text: "Your daily goal will pop up here." })
+    );
+  }
+  const fresh = !resultCard._shown;
+  resultCard._shown = true;
+  return el("div", { class: "resultCard" + (fresh ? " fresh" : ""), id: "resultCard", "aria-live": "polite" },
+    el("div", { class: "resultEyebrow", text: custom ? "✅ Your clinician's goal" : "🎉 Your daily goal" }),
+    el("div", { class: "suggestBig", id: "suggestBig", text: custom ? `${t} g` : `~${t} g` }),
+    el("div", { class: "resultUnit", text: "of protein a day" }),
+    el("div", { class: "resultSplit", id: "resultSplit", text: mealSplitText() }),
+    el("div", { class: "resultCheer", text: custom ? "Great, we'll plan around it." : "Next: pick foods you already enjoy." })
+  );
 }
 
 function renderSetup() {
   const p = profile();
   if (!p) { state.screen = "profile"; return renderProfile(); }
-  const suggested = suggestedTarget();
+  resultCard._shown = dailyTarget() > 0;
 
   const weightInput = el("input", {
     type: "number", id: "weightInput", min: "1", step: "0.1", inputmode: "decimal",
-    value: state.weightInput,
-    placeholder: state.weightUnit === "lb" ? "Weight, lb" : "Weight, kg",
+    value: state.weightInput, "aria-label": `Your weight in ${state.weightUnit === "lb" ? "pounds" : "kilograms"}`,
+    placeholder: state.weightUnit === "lb" ? "e.g. 160" : "e.g. 72",
     oninput: (e) => {
       state.weightInput = e.target.value;
       setWeightFromInput();
-      const box = document.getElementById("suggestBig");
-      const go = document.getElementById("toPlanBtn");
-      const s = suggestedTarget();
-      if (box) box.textContent = s ? `${s}g` : "—";
-      if (go) go.disabled = !(dailyTarget() > 0);
+      save();
+      updateSetupLive();
     }
   });
 
-  return [el("div", { class: "card" },
-    el("div", { class: "row between" },
-      el("h2", { text: `${p.emoji} Your number` }),
-      el("button", { class: "linkish", type: "button", id: "backProfileBtn",
-        onclick: () => { state.screen = "profile"; render(); }, text: "Change" })
-    ),
-    el("div", { class: "row" },
-      el("div", { class: "field grow" }, weightInput),
-      el("div", { class: "unitToggle" },
-        el("button", {
-          type: "button", id: "unitLb", class: state.weightUnit === "lb" ? "on" : "",
-          onclick: () => {
-            if (state.weightUnit === "lb") return;
-            const kg = parseWeightInput();
-            state.weightUnit = "lb";
-            if (kg) state.weightInput = String(Math.round(kgToLb(kg) * 10) / 10);
-            render();
-          }, text: "lb"
-        }),
-        el("button", {
-          type: "button", id: "unitKg", class: state.weightUnit === "kg" ? "on" : "",
-          onclick: () => {
-            if (state.weightUnit === "kg") return;
-            const kg = parseWeightInput();
-            state.weightUnit = "kg";
-            if (kg) state.weightInput = String(Math.round(kg * 10) / 10);
-            render();
-          }, text: "kg"
-        })
+  const step = (delta) => {
+    const cur = parseFloat(String(state.weightInput).replace(",", "."));
+    const base = isFinite(cur) && cur > 0 ? cur : (state.weightUnit === "lb" ? 160 : 72);
+    const next = Math.max(1, Math.round((isFinite(cur) && cur > 0 ? base + delta : base) * 10) / 10);
+    state.weightInput = String(next);
+    weightInput.value = state.weightInput;
+    setWeightFromInput();
+    save();
+    updateSetupLive();
+  };
+
+  const unitBtn = (u) => el("button", {
+    type: "button", id: u === "lb" ? "unitLb" : "unitKg", class: state.weightUnit === u ? "on" : "",
+    "aria-pressed": state.weightUnit === u ? "true" : "false",
+    onclick: () => {
+      if (state.weightUnit === u) return;
+      const kg = parseWeightInput();
+      state.weightUnit = u;
+      if (kg) state.weightInput = String(Math.round((u === "lb" ? kgToLb(kg) : kg) * 10) / 10);
+      render();
+    }, text: u
+  });
+
+  const customOn = state.targetMode === "custom" && state.customTarget > 0;
+  const details = el("details", { class: "howDetails", id: "howDetails", open: state.showCustom || customOn ? true : null,
+    ontoggle: (e) => { state.showCustom = e.target.open; } },
+    el("summary", { id: "howSummary", text: "How we got this · adjust" }),
+    el("div", { class: "howBody" },
+      el("div", { class: "howBlock" },
+        el("div", { class: "howHead", text: "The math" }),
+        el("div", { class: "howMath", id: "suggestBox", text: mathLine() }),
+        el("div", { class: "howSmall", text: `Rate: ${p.g_per_kg_default} g per kg, from the ${RATE_SOURCE[p.id] || "published guideline"}.` + (DRAFT ? " Rates pending physician review." : "") })
+      ),
+      el("div", { class: "howBlock" },
+        el("label", { class: "howHead", for: "customTargetInput", text: "My clinician gave me a number" }),
+        el("div", { class: "row" },
+          el("input", {
+            type: "number", id: "customTargetInput", min: "1", step: "1", inputmode: "numeric",
+            value: state.customTarget != null ? state.customTarget : "",
+            placeholder: "Grams of protein a day",
+            oninput: (e) => {
+              const v = parseFloat(e.target.value);
+              state.customTarget = isFinite(v) && v > 0 ? v : null;
+              state.targetMode = state.customTarget ? "custom" : "suggested";
+              save();
+              updateSetupLive();
+            }
+          }),
+        ),
+        el("div", { class: "howSmall", text: "Their number replaces the suggested goal." }),
+        el("button", { class: "linkish", type: "button", id: "useSuggestedBtn", hidden: !customOn,
+          onclick: () => { state.customTarget = null; state.targetMode = "suggested"; save(); render(); },
+          text: "Use the suggested goal instead" })
+      ),
+      el("div", { class: "howBlock" },
+        el("div", { class: "howHead", text: "Meals & snacks a day" }),
+        el("div", { class: "row mealsStep" },
+          el("button", { type: "button", class: "stepBtn", id: "mealsMinus", "aria-label": "Fewer meals", disabled: state.mealSlots <= 2,
+            onclick: () => { state.mealSlots = Math.max(2, state.mealSlots - 1); if (state.activeMeal >= state.mealSlots) state.activeMeal = state.mealSlots - 1; save(); render(); }, text: "−" }),
+          el("b", { id: "mealsCount", text: String(state.mealSlots) }),
+          el("button", { type: "button", class: "stepBtn", id: "mealsPlus", "aria-label": "More meals", disabled: state.mealSlots >= 6,
+            onclick: () => { state.mealSlots = Math.min(6, state.mealSlots + 1); save(); render(); }, text: "+" })
+        ),
+        el("div", { class: "howSmall", text: "We split your goal evenly. A planning aid, not a prescription." })
       )
+    )
+  );
+
+  return [el("div", { class: "card onboard" },
+    el("div", { class: "row between" },
+      el("button", { class: "linkish backLink", type: "button", id: "backProfileBtn",
+        onclick: () => { state.screen = "profile"; render(); }, text: "‹ Back" }),
+      el("div", { class: "stepDots", "aria-label": "Step 2 of 2" },
+        el("span", { class: "dot on" }), el("span", { class: "dot on" }), el("b", { text: "Step 2 of 2" }))
     ),
-    el("div", { class: "suggestCard" },
-      el("div", { class: "muted tiny", text: `Suggested · ${p.g_per_kg_default} g/kg` }),
-      el("div", { class: "suggestBig", id: "suggestBig", text: suggested ? `${suggested}g` : "—" }),
-      el("div", { class: "tiny muted", id: "suggestBox",
-        text: suggested
-          ? `${state.gPerKg} g/kg × ${Math.round(state.weightKg * 10) / 10} kg`
-          : "Enter weight" })
+    el("button", { class: "profilePill", type: "button", id: "profilePill", "aria-label": `${profileTitle(p)}. Tap to change.`,
+      onclick: () => { state.screen = "profile"; render(); } },
+      el("span", { "aria-hidden": "true", text: p.emoji }), el("span", { text: profileTitle(p) }), el("span", { class: "pillEdit", text: "Change" })),
+    el("h2", { class: "welcomeTitle", text: "About how much do you weigh?" }),
+    el("p", { class: "welcomeSub", text: "A rough number is fine. You can change it anytime." }),
+    el("div", { class: "weightRow" },
+      el("button", { type: "button", class: "stepBtn big", id: "weightMinus", "aria-label": "Decrease weight", onclick: () => step(-1), text: "−" }),
+      weightInput,
+      el("button", { type: "button", class: "stepBtn big", id: "weightPlus", "aria-label": "Increase weight", onclick: () => step(1), text: "+" })
     ),
+    el("div", { class: "unitToggle wide", role: "group", "aria-label": "Weight unit" }, unitBtn("lb"), unitBtn("kg")),
+    resultCard(),
     el("button", {
-      class: "linkish", type: "button", id: "toggleCustom",
-      onclick: () => { state.showCustom = !state.showCustom; render(); },
-      text: state.showCustom ? "Hide custom target" : "I have a clinician number"
-    }),
-    state.showCustom ? el("input", {
-      type: "number", id: "customTargetInput", min: "1", step: "1",
-      value: state.customTarget != null ? state.customTarget : "",
-      placeholder: "Daily protein, grams",
-      oninput: (e) => {
-        const v = parseFloat(e.target.value);
-        state.customTarget = isFinite(v) && v > 0 ? v : null;
-        state.targetMode = state.customTarget ? "custom" : "suggested";
-        const go = document.getElementById("toPlanBtn");
-        if (go) go.disabled = !(dailyTarget() > 0);
-      }
-    }) : null,
-    el("div", { class: "suggestCard soft" },
-      el("div", { class: "muted tiny", text: "Meals today" }),
-      mealChips(true),
-      el("div", { class: "tiny muted", text: "Draft split for finishing the day — not a prescription." })
-    ),
-    el("button", {
-      class: "btn btnPrimary btnBlock", type: "button", id: "toPlanBtn",
+      class: "btn btnPrimary btnBlock btnBig", type: "button", id: "toPlanBtn",
       disabled: !(dailyTarget() > 0),
       onclick: () => {
         setWeightFromInput();
@@ -1062,10 +1157,10 @@ function renderSetup() {
         save();
         render();
       },
-      text: "Pick foods →"
+      text: "Build my plate →"
     }),
-    el("p", { class: "tiny muted", text: "Rates pending physician review." }),
-    el("p", { class: "disclaimer", text: shortDisclaimer() })
+    details,
+    el("p", { class: "careNote", text: CARE_NOTE })
   )];
 }
 
