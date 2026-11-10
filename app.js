@@ -47,6 +47,10 @@ const state = {
   showCustom: false,
   showSrc: null,
   sheet: null, // null | "share" | "shop"
+  customInputMode: "g", // "g" (grams/day) | "gkg" (g per kg × weight)
+  customGPerKg: null,
+  customGPerKgInput: "",
+  editGoal: false,
 };
 
 function load() {
@@ -62,11 +66,14 @@ function load() {
       targetMode: s.targetMode || "suggested",
       customTarget: s.customTarget ?? null,
       gPerKg: s.gPerKg ?? null,
+      customInputMode: s.customInputMode === "gkg" ? "gkg" : "g",
+      customGPerKg: s.customGPerKg ?? null,
+      customGPerKgInput: s.customGPerKg != null ? String(s.customGPerKg) : "",
       foodSet: ["us","veg","desi"].includes(s.foodSet) ? s.foodSet : "us",
       mealSlots: Math.min(6, Math.max(2, s.mealSlots || 3)),
       activeMeal: s.activeMeal || 0,
       plan: Array.isArray(s.plan) ? s.plan.map(x => ({id: x.id, servings: x.servings, meal: x.meal ?? 0})) : [],
-      screen: s.profileId ? ((s.weightKg || s.customTarget) ? "play" : "setup") : "profile",
+      screen: s.profileId ? ((s.weightKg || s.customTarget) ? "play" : (s.profileId === "custom" ? "custom" : "setup")) : "profile",
       tab: "add",
     });
   } catch (_) { /* ignore */ }
@@ -82,6 +89,8 @@ function save() {
       targetMode: state.targetMode,
       customTarget: state.customTarget,
       gPerKg: state.gPerKg,
+      customInputMode: state.customInputMode,
+      customGPerKg: state.customGPerKg,
       foodSet: state.foodSet,
       mealSlots: state.mealSlots,
       activeMeal: state.activeMeal,
@@ -90,7 +99,20 @@ function save() {
   } catch (_) { /* ignore */ }
 }
 
-function profile() { return CONTENT.profiles[state.profileId] || null; }
+const CUSTOM_PROFILE = {
+  id: "custom",
+  label: "My own goal",
+  short: "Custom",
+  emoji: "🎯",
+  g_per_kg_default: null,
+  show_minerals: false,
+  about: "A daily protein goal you entered.",
+};
+
+function profile() {
+  if (state.profileId === "custom") return CUSTOM_PROFILE;
+  return CONTENT.profiles[state.profileId] || null;
+}
 
 function suggestedTarget() {
   const p = profile();
@@ -99,8 +121,51 @@ function suggestedTarget() {
 }
 
 function dailyTarget() {
-  if (state.targetMode === "custom" && state.customTarget > 0) return Math.round(state.customTarget);
+  if (state.targetMode === "custom") {
+    if (state.customInputMode === "gkg" && state.customGPerKg > 0 && state.weightKg) {
+      return Math.round(state.weightKg * state.customGPerKg);
+    }
+    if (state.customTarget > 0) return Math.round(state.customTarget);
+    return null;
+  }
   return suggestedTarget();
+}
+
+const GOAL_G_MIN = 10, GOAL_G_MAX = 300;
+const GOAL_GKG_MIN = 0.3, GOAL_GKG_MAX = 3.0;
+
+function customGoalError() {
+  if (state.customInputMode === "gkg") {
+    const r = state.customGPerKg;
+    if (r == null || !isFinite(r)) return null;
+    if (r < GOAL_GKG_MIN || r > GOAL_GKG_MAX) {
+      return "We plan for rates between 0.3 and 3.0 g per kg. Take another look at the number, and we'll keep going.";
+    }
+    if (!state.weightKg) return null;
+    const g = Math.round(state.weightKg * r);
+    if (g < GOAL_G_MIN || g > GOAL_G_MAX) {
+      return "That comes to a daily goal outside the range we plan for (10–300 g). Double-check the rate or weight.";
+    }
+    return null;
+  }
+  const g = state.customTarget;
+  if (g == null || !isFinite(g)) return null;
+  if (g < GOAL_G_MIN || g > GOAL_G_MAX) {
+    return "That one's outside the range we plan for (10–300 g a day). Double-check the number, and we'll take it from there.";
+  }
+  return null;
+}
+
+function customGoalReady() {
+  const t = dailyTarget();
+  return !!(t > 0 && !customGoalError());
+}
+
+function syncCustomGrams() {
+  if (state.targetMode !== "custom") return;
+  if (state.customInputMode === "gkg" && state.customGPerKg > 0 && state.weightKg && !customGoalError()) {
+    state.customTarget = Math.round(state.weightKg * state.customGPerKg);
+  }
 }
 
 function foodById(id) { return CONTENT.foods.find((f) => f.id === id); }
@@ -269,6 +334,7 @@ function clearAll() {
   Object.assign(state, {
     screen: "profile", tab: "add", profileId: null, weightKg: null, weightUnit: "lb",
     weightInput: "", targetMode: "suggested", customTarget: null, gPerKg: null,
+    customInputMode: "g", customGPerKg: null, customGPerKgInput: "", editGoal: false,
     foodSet: "us", mealSlots: 3, activeMeal: 0, plan: [],
     filter: "for-you", query: "", flash: "", showCustom: false, showSrc: null,
   });
@@ -934,7 +1000,7 @@ function progressHero() {
   );
 }
 
-/* ---------- Onboarding (v0.3.8 redesign: friendlier copy + layout only; target math unchanged) ---------- */
+/* ---------- Onboarding (v0.3.9: easy custom goal + polished Step 1; profile math unchanged) ---------- */
 const ONBOARD_COPY = {
   ckd: { title: "CKD, not on dialysis", sub: "We'll suggest a kidney-conscious goal from your weight." },
   dialysis: { title: "On dialysis (HD or PD)", sub: "Dialysis raises protein needs. We'll help you get there." },
@@ -959,8 +1025,31 @@ function mealSplitText() {
   return `About ${Math.round(per)} g at each of ${what}`;
 }
 
+function goToSetupScreen() {
+  state.screen = state.profileId === "custom" ? "custom" : "setup";
+  state.editGoal = false;
+  render();
+}
+
+function startCustomPath() {
+  state.profileId = "custom";
+  state.targetMode = "custom";
+  state.gPerKg = null;
+  if (!state.mealSlots) state.mealSlots = 3;
+  state.activeMeal = 0;
+  state.customInputMode = state.customInputMode === "gkg" ? "gkg" : "g";
+  state.showCustom = false;
+  state.editGoal = false;
+  state.screen = "custom";
+  save();
+  render();
+  const id = state.customInputMode === "gkg" ? "customGPerKgInput" : "customGoalInput";
+  const w = document.getElementById(id);
+  if (w) { try { w.focus({ preventScroll: true }); } catch (_) {} }
+}
+
 function renderProfile() {
-  return [el("div", { class: "card onboard" },
+  return [el("div", { class: "card onboard onboardStep1" },
     el("div", { class: "stepDots", "aria-label": "Step 1 of 2" },
       el("span", { class: "dot on" }), el("span", { class: "dot" }), el("b", { text: "Step 1 of 2" })),
     el("h2", { class: "welcomeTitle", text: "Let's find your protein goal 👋" }),
@@ -969,7 +1058,8 @@ function renderProfile() {
     el("div", { class: "profileGrid", id: "profileGrid", role: "list", "aria-labelledby": "pickLabel" },
       ...Object.values(CONTENT.profiles).map((p) =>
         el("button", {
-          class: "profileBtn" + (state.profileId === p.id ? " picked" : ""), type: "button", id: `pick-${p.id}`, role: "listitem",
+          class: "profileBtn tone-" + p.id + (state.profileId === p.id ? " picked" : ""),
+          type: "button", id: `pick-${p.id}`, role: "listitem", "data-id": p.id,
           onclick: () => {
             state.profileId = p.id;
             state.gPerKg = p.g_per_kg_default;
@@ -977,6 +1067,7 @@ function renderProfile() {
             state.activeMeal = 0;
             state.screen = "setup";
             state.showCustom = false;
+            state.editGoal = false;
             save();
             render();
             const w = document.getElementById("weightInput");
@@ -988,9 +1079,22 @@ function renderProfile() {
             el("strong", { text: profileTitle(p) }),
             el("span", { text: (ONBOARD_COPY[p.id] || {}).sub || p.about })
           ),
-          el("span", { class: "pChev", "aria-hidden": "true", text: "›" })
+          el("span", { class: "pChev", "aria-hidden": "true", text: state.profileId === p.id ? "✓" : "›" })
         )
       )
+    ),
+    el("div", { class: "orBreak", text: "or" }),
+    el("button", {
+      class: "profileBtn customPick" + (state.profileId === "custom" ? " picked" : ""),
+      type: "button", id: "pick-custom",
+      onclick: startCustomPath
+    },
+      el("span", { class: "pIcon", "aria-hidden": "true", text: "🎯" }),
+      el("span", { class: "pText" },
+        el("strong", { text: "I already have a goal from my care team" }),
+        el("span", { text: "Type it in grams a day, or as g per kg." })
+      ),
+      el("span", { class: "pChev", "aria-hidden": "true", text: "›" })
     ),
     el("p", { class: "careNote", text: "🔒 Stays on this device. " + CARE_NOTE })
   )];
@@ -998,19 +1102,33 @@ function renderProfile() {
 
 /** Refresh result card, math line, and CTA in place (keeps keyboard focus while typing). */
 function updateSetupLive() {
+  syncCustomGrams();
   const res = document.getElementById("resultCard");
   if (res) res.replaceWith(resultCard());
   const math = document.getElementById("suggestBox");
   if (math) math.textContent = mathLine();
   const go = document.getElementById("toPlanBtn");
-  if (go) go.disabled = !(dailyTarget() > 0);
+  if (go) go.disabled = !planReady();
   const clr = document.getElementById("useSuggestedBtn");
-  if (clr) clr.hidden = !(state.targetMode === "custom" && state.customTarget > 0);
+  if (clr) clr.hidden = !(state.targetMode === "custom" && state.customTarget > 0 && state.profileId !== "custom");
+  const err = document.getElementById("goalError");
+  if (err) {
+    const msg = customGoalError();
+    err.hidden = !msg;
+    err.textContent = msg || "";
+  }
+  const split = document.getElementById("customMathLine");
+  if (split) split.textContent = customMathLine();
+}
+
+function planReady() {
+  if (state.targetMode === "custom" || state.profileId === "custom") return customGoalReady();
+  return dailyTarget() > 0;
 }
 
 function mathLine() {
   const p = profile();
-  if (!p) return "";
+  if (!p || p.id === "custom") return "";
   const s = suggestedTarget();
   if (!s) return `Your weight × ${p.g_per_kg_default} g of protein per kg. Enter a weight to see it.`;
   const kg = Math.round(state.weightKg * 10) / 10;
@@ -1018,10 +1136,85 @@ function mathLine() {
   return `${from} × ${state.gPerKg} g per kg = ${s} g a day`;
 }
 
+function customMathLine() {
+  if (state.customInputMode !== "gkg") return "";
+  if (!state.weightKg || !(state.customGPerKg > 0)) return "Add your weight to see your daily goal.";
+  const kg = Math.round(state.weightKg * 10) / 10;
+  const from = state.weightUnit === "lb" ? `${state.weightInput} lb ≈ ${kg} kg` : `${kg} kg`;
+  const g = Math.round(state.weightKg * state.customGPerKg);
+  return `${from} × ${state.customGPerKg} g per kg = ${g} g a day`;
+}
+
+function beginEditGoal() {
+  if (state.targetMode !== "custom") {
+    const t = dailyTarget();
+    if (t > 0) {
+      state.customTarget = t;
+      state.customInputMode = "g";
+      state.targetMode = "custom";
+    }
+  }
+  state.editGoal = true;
+  save();
+  render();
+  const inp = document.getElementById("editGoalInput");
+  if (inp) { try { inp.focus(); inp.select(); } catch (_) {} }
+}
+
+function commitEditGoal(raw) {
+  const v = parseFloat(String(raw).replace(",", "."));
+  if (!isFinite(v) || String(raw).trim() === "") {
+    if (state.profileId !== "custom" && suggestedTarget()) {
+      state.customTarget = null;
+      state.targetMode = "suggested";
+      state.customInputMode = "g";
+      state.editGoal = false;
+      save();
+      render();
+      return;
+    }
+    return;
+  }
+  if (v < GOAL_G_MIN || v > GOAL_G_MAX) {
+    const err = document.getElementById("editGoalError");
+    if (err) {
+      err.hidden = false;
+      err.textContent = "That one's outside the range we plan for (10–300 g a day). Double-check the number, and we'll take it from there.";
+    }
+    return; // keep the previous valid goal
+  }
+  state.customTarget = v;
+  state.customInputMode = "g";
+  state.targetMode = "custom";
+  syncCustomGrams();
+  state.editGoal = false;
+  save();
+  render();
+}
+
 function resultCard() {
   const t = dailyTarget();
-  const custom = state.targetMode === "custom" && state.customTarget > 0;
-  if (!t) {
+  const err = customGoalError();
+  const custom = state.targetMode === "custom" && t > 0 && !err;
+  if (state.editGoal) {
+    const current = t || state.customTarget || "";
+    return el("div", { class: "resultCard editing", id: "resultCard" },
+      el("div", { class: "resultEyebrow", text: "Edit your daily goal" }),
+      el("div", { class: "goalEditRow" },
+        el("input", {
+          type: "number", id: "editGoalInput", min: String(GOAL_G_MIN), max: String(GOAL_G_MAX),
+          step: "1", inputmode: "numeric", value: current,
+          "aria-label": "Daily protein goal in grams",
+          onkeydown: (e) => { if (e.key === "Enter") { e.preventDefault(); commitEditGoal(e.target.value); } },
+          onblur: (e) => { commitEditGoal(e.target.value); }
+        }),
+        el("span", { class: "goalEditUnit", text: "g / day" })
+      ),
+      el("div", { class: "goalError", id: "editGoalError", hidden: !err, text: err || "" }),
+      el("div", { class: "tapHint", text: "Tap outside or press Enter to save." })
+    );
+  }
+  if (!t || err) {
     resultCard._shown = false;
     return el("div", { class: "resultCard empty", id: "resultCard", "aria-live": "polite" },
       el("div", { class: "resultEmoji", "aria-hidden": "true", text: "🎯" }),
@@ -1031,19 +1224,21 @@ function resultCard() {
   const fresh = !resultCard._shown;
   resultCard._shown = true;
   return el("div", { class: "resultCard" + (fresh ? " fresh" : ""), id: "resultCard", "aria-live": "polite" },
-    el("div", { class: "resultEyebrow", text: custom ? "✅ Your clinician's goal" : "🎉 Your daily goal" }),
-    el("div", { class: "suggestBig", id: "suggestBig", text: custom ? `${t} g` : `~${t} g` }),
+    el("div", { class: "resultEyebrow", text: custom ? "✅ Your goal" : "🎉 Your daily goal" }),
+    el("button", {
+      class: "suggestBig tapEdit", type: "button", id: "suggestBig",
+      "aria-label": `Daily goal ${t} grams. Tap to edit.`,
+      onclick: beginEditGoal,
+      text: custom ? `${t} g` : `~${t} g`
+    }),
     el("div", { class: "resultUnit", text: "of protein a day" }),
     el("div", { class: "resultSplit", id: "resultSplit", text: mealSplitText() }),
-    el("div", { class: "resultCheer", text: custom ? "Great, we'll plan around it." : "Next: pick foods you already enjoy." })
+    el("div", { class: "resultCheer", text: custom ? "Great, we'll plan around it." : "Next: pick foods you already enjoy." }),
+    el("div", { class: "tapHint", text: "Tap the number to edit" })
   );
 }
 
-function renderSetup() {
-  const p = profile();
-  if (!p) { state.screen = "profile"; return renderProfile(); }
-  resultCard._shown = dailyTarget() > 0;
-
+function makeWeightControls(onLive) {
   const weightInput = el("input", {
     type: "number", id: "weightInput", min: "1", step: "0.1", inputmode: "decimal",
     value: state.weightInput, "aria-label": `Your weight in ${state.weightUnit === "lb" ? "pounds" : "kilograms"}`,
@@ -1051,8 +1246,9 @@ function renderSetup() {
     oninput: (e) => {
       state.weightInput = e.target.value;
       setWeightFromInput();
+      syncCustomGrams();
       save();
-      updateSetupLive();
+      onLive();
     }
   });
 
@@ -1063,8 +1259,9 @@ function renderSetup() {
     state.weightInput = String(next);
     weightInput.value = state.weightInput;
     setWeightFromInput();
+    syncCustomGrams();
     save();
-    updateSetupLive();
+    onLive();
   };
 
   const unitBtn = (u) => el("button", {
@@ -1075,9 +1272,36 @@ function renderSetup() {
       const kg = parseWeightInput();
       state.weightUnit = u;
       if (kg) state.weightInput = String(Math.round((u === "lb" ? kgToLb(kg) : kg) * 10) / 10);
+      setWeightFromInput();
+      syncCustomGrams();
+      save();
       render();
     }, text: u
   });
+
+  return { weightInput, step, unitBtn };
+}
+
+function mealsAdjuster() {
+  return el("div", { class: "howBlock" },
+    el("div", { class: "howHead", text: "Meals & snacks a day" }),
+    el("div", { class: "row mealsStep" },
+      el("button", { type: "button", class: "stepBtn", id: "mealsMinus", "aria-label": "Fewer meals", disabled: state.mealSlots <= 2,
+        onclick: () => { state.mealSlots = Math.max(2, state.mealSlots - 1); if (state.activeMeal >= state.mealSlots) state.activeMeal = state.mealSlots - 1; save(); render(); }, text: "−" }),
+      el("b", { id: "mealsCount", text: String(state.mealSlots) }),
+      el("button", { type: "button", class: "stepBtn", id: "mealsPlus", "aria-label": "More meals", disabled: state.mealSlots >= 6,
+        onclick: () => { state.mealSlots = Math.min(6, state.mealSlots + 1); save(); render(); }, text: "+" })
+    ),
+    el("div", { class: "howSmall", text: "We split your goal evenly. A planning aid, not a prescription." })
+  );
+}
+
+function renderSetup() {
+  const p = profile();
+  if (!p || p.id === "custom") { return renderCustom(); }
+  resultCard._shown = dailyTarget() > 0 && !customGoalError();
+
+  const { weightInput, step, unitBtn } = makeWeightControls(updateSetupLive);
 
   const customOn = state.targetMode === "custom" && state.customTarget > 0;
   const details = el("details", { class: "howDetails", id: "howDetails", open: state.showCustom || customOn ? true : null,
@@ -1093,12 +1317,13 @@ function renderSetup() {
         el("label", { class: "howHead", for: "customTargetInput", text: "My clinician gave me a number" }),
         el("div", { class: "row" },
           el("input", {
-            type: "number", id: "customTargetInput", min: "1", step: "1", inputmode: "numeric",
+            type: "number", id: "customTargetInput", min: String(GOAL_G_MIN), max: String(GOAL_G_MAX), step: "1", inputmode: "numeric",
             value: state.customTarget != null ? state.customTarget : "",
             placeholder: "Grams of protein a day",
             oninput: (e) => {
               const v = parseFloat(e.target.value);
               state.customTarget = isFinite(v) && v > 0 ? v : null;
+              state.customInputMode = "g";
               state.targetMode = state.customTarget ? "custom" : "suggested";
               save();
               updateSetupLive();
@@ -1106,28 +1331,19 @@ function renderSetup() {
           }),
         ),
         el("div", { class: "howSmall", text: "Their number replaces the suggested goal." }),
+        el("div", { class: "goalError", id: "goalError", hidden: !customGoalError(), text: customGoalError() || "" }),
         el("button", { class: "linkish", type: "button", id: "useSuggestedBtn", hidden: !customOn,
-          onclick: () => { state.customTarget = null; state.targetMode = "suggested"; save(); render(); },
+          onclick: () => { state.customTarget = null; state.targetMode = "suggested"; state.customInputMode = "g"; state.editGoal = false; save(); render(); },
           text: "Use the suggested goal instead" })
       ),
-      el("div", { class: "howBlock" },
-        el("div", { class: "howHead", text: "Meals & snacks a day" }),
-        el("div", { class: "row mealsStep" },
-          el("button", { type: "button", class: "stepBtn", id: "mealsMinus", "aria-label": "Fewer meals", disabled: state.mealSlots <= 2,
-            onclick: () => { state.mealSlots = Math.max(2, state.mealSlots - 1); if (state.activeMeal >= state.mealSlots) state.activeMeal = state.mealSlots - 1; save(); render(); }, text: "−" }),
-          el("b", { id: "mealsCount", text: String(state.mealSlots) }),
-          el("button", { type: "button", class: "stepBtn", id: "mealsPlus", "aria-label": "More meals", disabled: state.mealSlots >= 6,
-            onclick: () => { state.mealSlots = Math.min(6, state.mealSlots + 1); save(); render(); }, text: "+" })
-        ),
-        el("div", { class: "howSmall", text: "We split your goal evenly. A planning aid, not a prescription." })
-      )
+      mealsAdjuster()
     )
   );
 
   return [el("div", { class: "card onboard" },
     el("div", { class: "row between" },
       el("button", { class: "linkish backLink", type: "button", id: "backProfileBtn",
-        onclick: () => { state.screen = "profile"; render(); }, text: "‹ Back" }),
+        onclick: () => { state.screen = "profile"; state.editGoal = false; render(); }, text: "‹ Back" }),
       el("div", { class: "stepDots", "aria-label": "Step 2 of 2" },
         el("span", { class: "dot on" }), el("span", { class: "dot on" }), el("b", { text: "Step 2 of 2" }))
     ),
@@ -1145,12 +1361,13 @@ function renderSetup() {
     resultCard(),
     el("button", {
       class: "btn btnPrimary btnBlock btnBig", type: "button", id: "toPlanBtn",
-      disabled: !(dailyTarget() > 0),
+      disabled: !planReady(),
       onclick: () => {
         setWeightFromInput();
-        if (!(dailyTarget() > 0)) return;
+        if (!planReady()) return;
         state.targetMode = state.customTarget ? "custom" : "suggested";
         if (!state.mealSlots) state.mealSlots = defaultMealSlots();
+        state.editGoal = false;
         state.screen = "play";
         state.tab = "add";
         state.filter = "for-you";
@@ -1163,6 +1380,146 @@ function renderSetup() {
     el("p", { class: "careNote", text: CARE_NOTE })
   )];
 }
+
+function modeToggle(idG, idKg) {
+  const setMode = (mode) => {
+    if (state.customInputMode === mode) return;
+    state.customInputMode = mode;
+    state.targetMode = "custom";
+    state.editGoal = false;
+    if (mode === "gkg") {
+      if (state.customGPerKg == null && state.customGPerKgInput === "") {
+        state.customGPerKgInput = "";
+      }
+    }
+    syncCustomGrams();
+    save();
+    render();
+    const id = mode === "gkg" ? "customGPerKgInput" : "customGoalInput";
+    const w = document.getElementById(id);
+    if (w) { try { w.focus({ preventScroll: true }); } catch (_) {} }
+  };
+  return el("div", { class: "unitToggle wide modeToggle", role: "group", "aria-label": "Goal units" },
+    el("button", {
+      type: "button", id: idG, class: state.customInputMode !== "gkg" ? "on" : "",
+      "aria-pressed": state.customInputMode !== "gkg" ? "true" : "false",
+      onclick: () => setMode("g"), text: "g / day"
+    }),
+    el("button", {
+      type: "button", id: idKg, class: state.customInputMode === "gkg" ? "on" : "",
+      "aria-pressed": state.customInputMode === "gkg" ? "true" : "false",
+      onclick: () => setMode("gkg"), text: "g / kg"
+    })
+  );
+}
+
+function renderCustom() {
+  state.targetMode = "custom";
+  if (!state.profileId) state.profileId = "custom";
+  resultCard._shown = customGoalReady();
+
+  const gkg = state.customInputMode === "gkg";
+  const err = customGoalError();
+
+  const goalInput = gkg
+    ? el("input", {
+        type: "number", id: "customGPerKgInput", min: "0.3", max: "3", step: "0.1", inputmode: "decimal",
+        value: state.customGPerKgInput, "aria-label": "Protein goal in grams per kilogram",
+        placeholder: "e.g. 1.2",
+        oninput: (e) => {
+          state.customGPerKgInput = e.target.value;
+          const v = parseFloat(String(e.target.value).replace(",", "."));
+          state.customGPerKg = isFinite(v) && v > 0 ? v : null;
+          state.targetMode = "custom";
+          syncCustomGrams();
+          save();
+          updateSetupLive();
+        }
+      })
+    : el("input", {
+        type: "number", id: "customGoalInput", min: String(GOAL_G_MIN), max: String(GOAL_G_MAX), step: "1", inputmode: "numeric",
+        value: state.customTarget != null ? state.customTarget : "",
+        "aria-label": "Daily protein goal in grams",
+        placeholder: "e.g. 80",
+        oninput: (e) => {
+          const v = parseFloat(e.target.value);
+          state.customTarget = isFinite(v) && v > 0 ? v : null;
+          state.customInputMode = "g";
+          state.targetMode = "custom";
+          save();
+          updateSetupLive();
+        }
+      });
+
+  const weightBlock = gkg ? (() => {
+    const { weightInput, step, unitBtn } = makeWeightControls(updateSetupLive);
+    return el("div", { class: "customWeight" },
+      el("h3", { class: "subHead", text: "And your weight?" }),
+      el("p", { class: "welcomeSub tight", text: "A rough number is fine." }),
+      el("div", { class: "weightRow" },
+        el("button", { type: "button", class: "stepBtn big", id: "weightMinus", "aria-label": "Decrease weight", onclick: () => step(-1), text: "−" }),
+        weightInput,
+        el("button", { type: "button", class: "stepBtn big", id: "weightPlus", "aria-label": "Increase weight", onclick: () => step(1), text: "+" })
+      ),
+      el("div", { class: "unitToggle wide", role: "group", "aria-label": "Weight unit" }, unitBtn("lb"), unitBtn("kg")),
+      el("div", { class: "howMath", id: "customMathLine", text: customMathLine() })
+    );
+  })() : null;
+
+  const details = el("details", { class: "howDetails", id: "howDetails", open: state.showCustom ? true : null,
+    ontoggle: (e) => { state.showCustom = e.target.open; } },
+    el("summary", { id: "howSummary", text: "How we got this · adjust" }),
+    el("div", { class: "howBody" },
+      el("div", { class: "howBlock" },
+        el("div", { class: "howHead", text: "Your number" }),
+        el("div", { class: "howMath", text: gkg ? (customMathLine() || "Enter a rate and your weight.") : (state.customTarget > 0 ? `You entered ${Math.round(state.customTarget)} g a day.` : "Enter a daily goal in grams.") }),
+        el("div", { class: "howSmall", text: "This is the number we'll plan around. Tap the goal anytime to edit." })
+      ),
+      mealsAdjuster()
+    )
+  );
+
+  return [el("div", { class: "card onboard onboardCustom" },
+    el("div", { class: "row between" },
+      el("button", { class: "linkish backLink", type: "button", id: "backProfileBtn",
+        onclick: () => { state.screen = "profile"; state.editGoal = false; render(); }, text: "‹ Back" }),
+      el("div", { class: "stepDots", "aria-label": "Your own goal" },
+        el("span", { class: "dot on" }), el("b", { text: "Your own goal" }))
+    ),
+    el("button", { class: "profilePill", type: "button", id: "profilePill", "aria-label": "My own goal. Tap to change.",
+      onclick: () => { state.screen = "profile"; render(); } },
+      el("span", { "aria-hidden": "true", text: "🎯" }), el("span", { text: "My own goal" }), el("span", { class: "pillEdit", text: "Change" })),
+    el("h2", { class: "welcomeTitle", text: "What's your daily protein goal?" }),
+    el("p", { class: "welcomeSub", text: "Enter the number from your care team. You can change it anytime." }),
+    modeToggle("customModeG", "customModeGkg"),
+    el("div", { class: "goalRow" }, goalInput, el("span", { class: "goalUnit", text: gkg ? "g / kg" : "g / day" })),
+    el("p", { class: "howSmall goalHint", text: gkg ? "We'll multiply this by your weight." : "Grams of protein for the whole day." }),
+    el("div", { class: "goalError", id: "goalError", hidden: !err, text: err || "" }),
+    weightBlock,
+    resultCard(),
+    el("button", {
+      class: "btn btnPrimary btnBlock btnBig", type: "button", id: "toPlanBtn",
+      disabled: !planReady(),
+      onclick: () => {
+        setWeightFromInput();
+        syncCustomGrams();
+        if (!planReady()) return;
+        state.targetMode = "custom";
+        if (!state.mealSlots) state.mealSlots = 3;
+        state.editGoal = false;
+        state.screen = "play";
+        state.tab = "add";
+        state.filter = "for-you";
+        save();
+        render();
+      },
+      text: "Build my plate →"
+    }),
+    details,
+    el("p", { class: "careNote", text: CARE_NOTE })
+  )];
+}
+
 
 function shakeFoods() {
   return CONTENT.foods.filter((f) =>
@@ -1340,7 +1697,7 @@ function renderMoreTab() {
     el("h2", { text: "More" }),
     el("p", { class: "muted", text: p ? `${p.label} · target ${dailyTarget() || "—"}g` : "" }),
     el("button", { class: "btn btnGhost btnBlock", type: "button", id: "editTargetBtn",
-      onclick: () => { state.screen = "setup"; render(); }, text: "Edit weight / target" }),
+      onclick: goToSetupScreen, text: "Edit weight / target" }),
     el("button", { class: "btn btnGhost btnBlock", type: "button", id: "changeProfileBtn",
       onclick: () => { state.screen = "profile"; render(); }, text: "Change profile" }),
     el("button", { class: "btn btnDanger btnBlock", type: "button", id: "clearAllBtn",
@@ -1395,12 +1752,13 @@ function render() {
       ),
       state.screen === "play" ? el("button", {
         class: "iconBtn", type: "button", id: "headerTargetBtn",
-        onclick: () => { state.screen = "setup"; render(); },
+        onclick: goToSetupScreen,
         text: dailyTarget() ? `${dailyTarget()}g` : "Set"
       }) : null
     )
   );
   const parts = state.screen === "profile" ? renderProfile()
+    : state.screen === "custom" ? renderCustom()
     : state.screen === "setup" ? renderSetup()
     : renderPlay();
   for (const part of parts) app.append(part);
@@ -1430,4 +1788,4 @@ if ("serviceWorker" in navigator) {
   });
 }
 
-window.__PP = { state, dailyTarget, totals, suggestedTarget, profile, addFood, changeServings, changeServingsAt, save, render, relevanceScore, profileScore, mealFitScore, healthyProteinBoost, activeMealRole, perMealTarget, mealProtein, defaultMealSlots, mealComplete, dayComplete, suggestForMeal, nextOpenMeal, mealLabel, filteredFoods, shakeFoods, buildPlanText, buildShoppingListText, shoppingListItems, shopName, isGroceryItem, amazonSearchUrl, costcoSearchUrl, canNativeShare };
+window.__PP = { state, dailyTarget, totals, suggestedTarget, profile, addFood, changeServings, changeServingsAt, save, render, relevanceScore, profileScore, mealFitScore, healthyProteinBoost, activeMealRole, perMealTarget, mealProtein, defaultMealSlots, mealComplete, dayComplete, suggestForMeal, nextOpenMeal, mealLabel, filteredFoods, shakeFoods, buildPlanText, buildShoppingListText, shoppingListItems, shopName, isGroceryItem, amazonSearchUrl, costcoSearchUrl, canNativeShare, customGoalError, customGoalReady, planReady, GOAL_G_MIN, GOAL_G_MAX, GOAL_GKG_MIN, GOAL_GKG_MAX, startCustomPath };
