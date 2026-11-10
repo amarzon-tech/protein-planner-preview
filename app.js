@@ -1000,18 +1000,25 @@ function progressHero() {
   );
 }
 
-/* ---------- Onboarding (v0.3.9: easy custom goal + polished Step 1; profile math unchanged) ---------- */
+/* ---------- Onboarding (v0.3.10: general adult + athlete profiles; existing math unchanged) ---------- */
 const ONBOARD_COPY = {
-  ckd: { title: "CKD, not on dialysis", sub: "We'll suggest a kidney-conscious goal from your weight." },
+  ckd: { title: "CKD, not on dialysis", sub: "A kidney-conscious goal from your weight." },
   dialysis: { title: "On dialysis (HD or PD)", sub: "Dialysis raises protein needs. We'll help you get there." },
-  general: { title: "General health & fitness", sub: "An everyday goal for healthy adults." },
+  general: { title: "General adult (no kidney disease)", sub: "The usual adult RDA from your weight." },
+  athlete: { title: "Active / athlete", sub: "A training goal from your weight." },
 };
 const RATE_SOURCE = {
   ckd: "KDOQI 2020 kidney nutrition guideline",
   dialysis: "KDOQI 2020 kidney nutrition guideline",
   general: "Adult RDA (National Academies)",
+  athlete: "ACSM / ISSN sports nutrition guidance",
 };
 const CARE_NOTE = "For learning only. Your care team has the final say.";
+const KIDNEY_CARE_NOTE = "If you have kidney disease, follow the goal from your care team.";
+const PROFILE_GROUPS = [
+  { id: "kidney", label: "Kidney care", ids: ["ckd", "dialysis"] },
+  { id: "everyone", label: "Everyone else", ids: ["general", "athlete"] },
+];
 
 function profileTitle(p) { return (ONBOARD_COPY[p.id] || {}).title || p.label; }
 
@@ -1048,41 +1055,57 @@ function startCustomPath() {
   if (w) { try { w.focus({ preventScroll: true }); } catch (_) {} }
 }
 
+function pickProfile(p) {
+  state.profileId = p.id;
+  state.gPerKg = p.g_per_kg_default;
+  state.mealSlots = defaultMealSlots();
+  state.activeMeal = 0;
+  state.screen = "setup";
+  state.showCustom = false;
+  state.editGoal = false;
+  save();
+  render();
+  const w = document.getElementById("weightInput");
+  if (w && !w.value) { try { w.focus({ preventScroll: true }); } catch (_) {} }
+}
+
+function profileCard(p, compact) {
+  return el("button", {
+    class: "profileBtn tone-" + p.id + (compact ? " compact" : "") + (state.profileId === p.id ? " picked" : ""),
+    type: "button", id: `pick-${p.id}`, role: "listitem", "data-id": p.id,
+    onclick: () => pickProfile(p)
+  },
+    el("span", { class: "pIcon", "aria-hidden": "true", text: p.emoji }),
+    el("span", { class: "pText" },
+      el("strong", { text: profileTitle(p) }),
+      el("span", { text: (ONBOARD_COPY[p.id] || {}).sub || p.about })
+    ),
+    compact ? null : el("span", { class: "pChev", "aria-hidden": "true", text: state.profileId === p.id ? "✓" : "›" })
+  );
+}
+
 function renderProfile() {
+  const groups = PROFILE_GROUPS.map((g) => {
+    const cards = g.ids.map((id) => CONTENT.profiles[id]).filter(Boolean);
+    if (!cards.length) return null;
+    return el("div", { class: "profileGroup", "data-group": g.id },
+      el("div", { class: "groupLabel", text: g.label }),
+      el("div", { class: "profileGrid cols2", role: "list", "aria-label": g.label },
+        ...cards.map((p) => profileCard(p, true))
+      ),
+      g.id === "everyone"
+        ? el("p", { class: "groupNote", id: "everyoneNote", text: "Older adults are often advised 1.0–1.2 g per kg — adjust this in the next step. If you have kidney disease, follow the goal from your care team." })
+        : null
+    );
+  });
+
   return [el("div", { class: "card onboard onboardStep1" },
     el("div", { class: "stepDots", "aria-label": "Step 1 of 2" },
       el("span", { class: "dot on" }), el("span", { class: "dot" }), el("b", { text: "Step 1 of 2" })),
     el("h2", { class: "welcomeTitle", text: "Let's find your protein goal 👋" }),
     el("p", { class: "welcomeSub", text: "Two quick steps, then you'll build your plate." }),
     el("div", { class: "pickLabel", id: "pickLabel", text: "Which fits you best?" }),
-    el("div", { class: "profileGrid", id: "profileGrid", role: "list", "aria-labelledby": "pickLabel" },
-      ...Object.values(CONTENT.profiles).map((p) =>
-        el("button", {
-          class: "profileBtn tone-" + p.id + (state.profileId === p.id ? " picked" : ""),
-          type: "button", id: `pick-${p.id}`, role: "listitem", "data-id": p.id,
-          onclick: () => {
-            state.profileId = p.id;
-            state.gPerKg = p.g_per_kg_default;
-            state.mealSlots = defaultMealSlots();
-            state.activeMeal = 0;
-            state.screen = "setup";
-            state.showCustom = false;
-            state.editGoal = false;
-            save();
-            render();
-            const w = document.getElementById("weightInput");
-            if (w && !w.value) { try { w.focus({ preventScroll: true }); } catch (_) {} }
-          }
-        },
-          el("span", { class: "pIcon", "aria-hidden": "true", text: p.emoji }),
-          el("span", { class: "pText" },
-            el("strong", { text: profileTitle(p) }),
-            el("span", { text: (ONBOARD_COPY[p.id] || {}).sub || p.about })
-          ),
-          el("span", { class: "pChev", "aria-hidden": "true", text: state.profileId === p.id ? "✓" : "›" })
-        )
-      )
-    ),
+    ...groups,
     el("div", { class: "orBreak", text: "or" }),
     el("button", {
       class: "profileBtn customPick" + (state.profileId === "custom" ? " picked" : ""),
@@ -1107,6 +1130,16 @@ function updateSetupLive() {
   if (res) res.replaceWith(resultCard());
   const math = document.getElementById("suggestBox");
   if (math) math.textContent = mathLine();
+  const rateLine = document.getElementById("rateSourceLine");
+  if (rateLine) {
+    const p = profile();
+    if (p) rateLine.textContent = rateSourceLine(p);
+  }
+  const rateVal = document.getElementById("rateValue");
+  if (rateVal && profile()) {
+    const cur = state.gPerKg != null ? state.gPerKg : profile().g_per_kg_default;
+    rateVal.textContent = `${cur} g/kg`;
+  }
   const go = document.getElementById("toPlanBtn");
   if (go) go.disabled = !planReady();
   const clr = document.getElementById("useSuggestedBtn");
@@ -1129,11 +1162,22 @@ function planReady() {
 function mathLine() {
   const p = profile();
   if (!p || p.id === "custom") return "";
+  const rate = state.gPerKg != null ? state.gPerKg : p.g_per_kg_default;
   const s = suggestedTarget();
-  if (!s) return `Your weight × ${p.g_per_kg_default} g of protein per kg. Enter a weight to see it.`;
+  if (!s) return `Your weight × ${rate} g of protein per kg. Enter a weight to see it.`;
   const kg = Math.round(state.weightKg * 10) / 10;
   const from = state.weightUnit === "lb" ? `${state.weightInput} lb ≈ ${kg} kg` : `${kg} kg`;
-  return `${from} × ${state.gPerKg} g per kg = ${s} g a day`;
+  return `${from} × ${rate} g per kg = ${s} g a day`;
+}
+
+function rateSourceLine(p) {
+  const src = RATE_SOURCE[p.id] || "published guideline";
+  const rate = state.gPerKg != null ? state.gPerKg : p.g_per_kg_default;
+  const adjusted = p && rate !== p.g_per_kg_default;
+  const extra = p.id === "general"
+    ? " Older adults are often advised 1.0–1.2 g per kg."
+    : "";
+  return `Rate: ${rate} g per kg, from the ${src}.` + (adjusted ? " (You adjusted this.)" : "") + extra + (DRAFT ? " Rates pending physician review." : "");
 }
 
 function customMathLine() {
@@ -1282,6 +1326,52 @@ function makeWeightControls(onLive) {
   return { weightInput, step, unitBtn };
 }
 
+function canAdjustRate(p) {
+  return !!(p && p.id !== "custom" && p.g_per_kg_max != null && p.g_per_kg_min != null && p.g_per_kg_max - p.g_per_kg_min >= 0.15 && (p.id === "athlete" || p.id === "general"));
+}
+
+function rateStep(delta) {
+  const p = profile();
+  if (!canAdjustRate(p)) return;
+  const min = p.g_per_kg_min, max = p.g_per_kg_max;
+  const cur = state.gPerKg != null ? state.gPerKg : p.g_per_kg_default;
+  const next = Math.round((cur + delta) * 10) / 10;
+  state.gPerKg = Math.min(max, Math.max(min, next));
+  if (state.targetMode === "custom" && state.customInputMode === "gkg") {
+    /* leave a typed custom grams goal alone; rate only affects suggested math */
+  }
+  save();
+  render();
+}
+
+function rateNote(p) {
+  if (p.id === "athlete") {
+    return "You can set this anywhere in the ACSM range of 1.2–2.0 g per kg (ISSN typically cites 1.4–2.0). Strength training is often toward the higher end.";
+  }
+  if (p.id === "general") {
+    return "The usual adult RDA is 0.8 g per kg. Older adults are often advised 1.0–1.2 g per kg.";
+  }
+  return "";
+}
+
+function rateAdjuster(p) {
+  if (!canAdjustRate(p)) return null;
+  const cur = state.gPerKg != null ? state.gPerKg : p.g_per_kg_default;
+  return el("div", { class: "howBlock", id: "rateAdjust" },
+    el("div", { class: "howHead", text: "Protein rate" }),
+    el("div", { class: "row mealsStep" },
+      el("button", { type: "button", class: "stepBtn", id: "rateMinus", "aria-label": "Lower protein rate",
+        disabled: cur <= p.g_per_kg_min + 1e-9,
+        onclick: () => rateStep(-0.1), text: "−" }),
+      el("b", { id: "rateValue", text: `${cur} g/kg` }),
+      el("button", { type: "button", class: "stepBtn", id: "ratePlus", "aria-label": "Raise protein rate",
+        disabled: cur >= p.g_per_kg_max - 1e-9,
+        onclick: () => rateStep(0.1), text: "+" })
+    ),
+    el("div", { class: "howSmall", text: rateNote(p) })
+  );
+}
+
 function mealsAdjuster() {
   return el("div", { class: "howBlock" },
     el("div", { class: "howHead", text: "Meals & snacks a day" }),
@@ -1311,8 +1401,9 @@ function renderSetup() {
       el("div", { class: "howBlock" },
         el("div", { class: "howHead", text: "The math" }),
         el("div", { class: "howMath", id: "suggestBox", text: mathLine() }),
-        el("div", { class: "howSmall", text: `Rate: ${p.g_per_kg_default} g per kg, from the ${RATE_SOURCE[p.id] || "published guideline"}.` + (DRAFT ? " Rates pending physician review." : "") })
+        el("div", { class: "howSmall", id: "rateSourceLine", text: rateSourceLine(p) })
       ),
+      rateAdjuster(p),
       el("div", { class: "howBlock" },
         el("label", { class: "howHead", for: "customTargetInput", text: "My clinician gave me a number" }),
         el("div", { class: "row" },
@@ -1377,6 +1468,9 @@ function renderSetup() {
       text: "Build my plate →"
     }),
     details,
+    (p.id === "general" || p.id === "athlete")
+      ? el("p", { class: "careNote kidneyNote", text: KIDNEY_CARE_NOTE })
+      : null,
     el("p", { class: "careNote", text: CARE_NOTE })
   )];
 }
@@ -1691,23 +1785,48 @@ function renderPlateTab() {
   );
 }
 
+function sourceItems() {
+  const items = [];
+  const order = ["ckd", "dialysis", "general", "athlete"];
+  for (const id of order) {
+    const p = CONTENT.profiles[id];
+    if (!p) continue;
+    items.push(el("div", { class: "sourceItem" },
+      el("div", { class: "howHead", text: p.label }),
+      el("p", { class: "howSmall", text: p.citation || p.about || "" }),
+      p.citation_url
+        ? el("a", { href: p.citation_url, target: "_blank", rel: "noopener noreferrer", text: "Open source" })
+        : null
+    ));
+  }
+  return items;
+}
+
 function renderMoreTab() {
   const p = profile();
-  return el("div", { class: "card" },
-    el("h2", { text: "More" }),
-    el("p", { class: "muted", text: p ? `${p.label} · target ${dailyTarget() || "—"}g` : "" }),
-    el("button", { class: "btn btnGhost btnBlock", type: "button", id: "editTargetBtn",
-      onclick: goToSetupScreen, text: "Edit weight / target" }),
-    el("button", { class: "btn btnGhost btnBlock", type: "button", id: "changeProfileBtn",
-      onclick: () => { state.screen = "profile"; render(); }, text: "Change profile" }),
-    el("button", { class: "btn btnDanger btnBlock", type: "button", id: "clearAllBtn",
-      onclick: () => { if (confirm("Clear this device's saved plan?")) clearAll(); },
-      text: "Clear saved plan" }),
-    el("p", { class: "disclaimer", text: shortDisclaimer() }),
-    el("p", { class: "tiny muted", text: p ? "Guideline rates need Dr D sign-off." : "" }),
-    el("div", { class: "footerLinks" },
-      el("a", { href: "privacy.html", text: "Privacy" }),
-      el("a", { href: "CONTENT_REVIEW.md", text: "Review file" })
+  return el("div", {},
+    el("div", { class: "card" },
+      el("h2", { text: "More" }),
+      el("p", { class: "muted", text: p ? `${p.label} · target ${dailyTarget() || "—"}g` : "" }),
+      el("button", { class: "btn btnGhost btnBlock", type: "button", id: "editTargetBtn",
+        onclick: goToSetupScreen, text: "Edit weight / target" }),
+      el("button", { class: "btn btnGhost btnBlock", type: "button", id: "changeProfileBtn",
+        onclick: () => { state.screen = "profile"; render(); }, text: "Change profile" }),
+      el("button", { class: "btn btnDanger btnBlock", type: "button", id: "clearAllBtn",
+        onclick: () => { if (confirm("Clear this device's saved plan?")) clearAll(); },
+        text: "Clear saved plan" }),
+      el("p", { class: "disclaimer", text: shortDisclaimer() }),
+      el("p", { class: "tiny muted", text: p ? "Guideline rates need Dr D sign-off." : "" }),
+      el("div", { class: "footerLinks" },
+        el("a", { href: "privacy.html", text: "Privacy" }),
+        el("a", { href: "CONTENT_REVIEW.md", text: "Review file" })
+      )
+    ),
+    el("div", { class: "card", id: "aboutSources" },
+      el("h2", { text: "About & sources" }),
+      el("p", { class: "muted", text: "Protein goals in this app come from published nutrition guidelines. They are for learning only — your care team has the final say." }),
+      el("p", { class: "groupNote kidneyNote", text: KIDNEY_CARE_NOTE }),
+      ...sourceItems()
     )
   );
 }
