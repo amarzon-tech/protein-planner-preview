@@ -89,6 +89,9 @@
   .field.grow{ flex:1; min-width:8rem; }
   input, select{ font:inherit; padding:.8rem .9rem; border-radius:1rem; border:1.5px solid #cbd5e1; background:#fff; color:var(--text); width:100%; }
   input:focus{ border-color:var(--accent); box-shadow:0 0 0 3px rgba(13,148,136,.18); outline:none; }
+  input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
+  input[type=number]::-webkit-outer-spin-button,
+  input[type=number]::-webkit-inner-spin-button{ -webkit-appearance:none; margin:0; }
   .unitToggle{ display:inline-flex; border:1.5px solid #cbd5e1; border-radius:1rem; overflow:hidden; flex:none; }
   .unitToggle button{ border:0; background:var(--cream); color:#334155; padding:.8rem .85rem; font:inherit; font-weight:800; cursor:pointer; }
   .unitToggle button.on{ background:var(--teal); color:#fff; }
@@ -252,7 +255,7 @@
   @keyframes sheetUp{ from{ transform:translateY(18px); opacity:0 } to{ transform:none; opacity:1 } }
   @media (prefers-reduced-motion: reduce){ .sheet { animation:none; } }
 
-  /* ---- Onboarding v0.3.10: grouped profiles + custom goal ---- */
+  /* ---- Onboarding v0.3.12: guided one-question flow ---- */
   .onboard{ gap:.8rem; padding:1.2rem 1.1rem 1.1rem; }
   .stepDots{ display:inline-flex; align-items:center; gap:.3rem; }
   .stepDots .dot{ width:.55rem; height:.55rem; border-radius:999px; background:#e2e8f0; }
@@ -477,6 +480,68 @@
 
   @media (prefers-reduced-motion: reduce){
     .onboard .profileBtn { animation:none; }
+  }
+
+  /* Guided quiz */
+  .quizCard{ gap:.85rem; padding:1.2rem 1.1rem 1.15rem; min-height:28rem; }
+  .quizTop{ align-items:center; min-height:2.75rem; }
+  .backLink.spacer{ visibility:hidden; min-height:2.75rem; }
+  .quizChoices{ display:flex; flex-direction:column; gap:.7rem; margin-top:.15rem; }
+  .quizChip{
+    display:flex; flex-direction:column; align-items:flex-start; gap:.28rem;
+    width:100%; text-align:left; border:1.5px solid #e2e8f0; background:#fff;
+    border-radius:1.3rem; padding:1.05rem 1.15rem; min-height:4.15rem;
+    font:inherit; color:inherit; cursor:pointer;
+    box-shadow:0 .18rem .7rem rgba(15,23,42,.05);
+    transition: border-color .18s ease, transform .18s ease, box-shadow .18s ease, background .18s ease;
+  }
+  .quizChip strong{ font-size:1.12rem; letter-spacing:-.02em; color:#0f172a; }
+  .quizChip span{ font-size:.9rem; color:#475569; line-height:1.4; }
+  .quizChip:hover, .quizChip:focus-visible{
+    border-color:var(--accent); transform:translateY(-1px);
+    box-shadow:0 .45rem 1.2rem rgba(13,148,136,.16);
+  }
+  .quizChip:active{ transform:scale(.985); }
+  .quizChip.quizPrimary{ min-height:4.4rem; justify-content:center; align-items:center; text-align:center;
+    background:linear-gradient(160deg,#fff,#f0fdfa); border-color:#99f6e4; }
+  .quizChip.quizPrimary strong{ font-size:1.28rem; }
+  .quizChip.quizAlt{
+    background:linear-gradient(160deg,#fffdf9,#fff7ed); border-color:#fed7aa;
+  }
+  .quizChip.quizAlt:hover, .quizChip.quizAlt:focus-visible{
+    border-color:#fb923c; box-shadow:0 .45rem 1.2rem rgba(234,88,12,.14);
+  }
+  .quizPane.fwd{ animation: quizIn .38s cubic-bezier(.22,1,.36,1) both; }
+  .quizPane.back{ animation: quizInBack .38s cubic-bezier(.22,1,.36,1) both; }
+  @keyframes quizIn{ from{ opacity:0; transform:translateX(28px); } to{ opacity:1; transform:none; } }
+  @keyframes quizInBack{ from{ opacity:0; transform:translateX(-28px); } to{ opacity:1; transform:none; } }
+  @media (prefers-reduced-motion: reduce){
+    .quizPane.fwd, .quizPane.back, .resultCard.fresh { animation:none !important; }
+  }
+
+  /* Revealed goal: compact so the number, Build CTA, and How we got this fit on 390×844 */
+  .onboard.hasReveal{
+    gap:.5rem;
+    padding:.95rem 1rem .85rem;
+  }
+  .onboard.hasReveal .welcomeTitle{ font-size:1.22rem !important; }
+  .onboard.hasReveal .welcomeSub{ display:none; }
+  .onboard.hasReveal .profilePill{ min-height:2.35rem; padding:.28rem .8rem; font-size:.86rem; }
+  .onboard.hasReveal .weightRow input,
+  .onboard.hasReveal .stepBtn.big{ min-height:3.25rem; }
+  .onboard.hasReveal .weightRow input{ font-size:1.7rem; padding:.45rem .35rem; }
+  .onboard.hasReveal .unitToggle.wide button{ min-height:2.55rem; }
+  .onboard.hasReveal .resultCard{ padding:.7rem .85rem .75rem; }
+  .onboard.hasReveal .resultCard .suggestBig{ font-size:3.15rem; }
+  .onboard.hasReveal .resultCheer,
+  .onboard.hasReveal .tapHint{ display:none; }
+  .onboard.hasReveal .careNote{ font-size:.78rem; margin:0; line-height:1.35; }
+  .onboard.hasReveal .btnBig{ min-height:3.15rem; }
+  @media (max-height: 820px), (max-width: 370px){
+    .onboard.hasReveal{ gap:.4rem; padding:.75rem .85rem .7rem; }
+    .onboard.hasReveal .welcomeTitle{ font-size:1.12rem !important; }
+    .onboard.hasReveal .resultCard .suggestBig{ font-size:2.75rem; }
+    .onboard.hasReveal .careNote{ font-size:.74rem; }
   }
 </style>
 </head>

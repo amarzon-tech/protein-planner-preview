@@ -51,6 +51,11 @@ const state = {
   customGPerKg: null,
   customGPerKgInput: "",
   editGoal: false,
+  quizStep: "kidney", // kidney | ckdType | age | activity
+  quizKidney: null, // "yes" | "no"
+  quizAge: null, // "under65" | "65plus"
+  quizActivity: null, // "everyday" | "training"
+  quizDir: 0, // 1 forward, -1 back, 0 none
 };
 
 function load() {
@@ -69,6 +74,10 @@ function load() {
       customInputMode: s.customInputMode === "gkg" ? "gkg" : "g",
       customGPerKg: s.customGPerKg ?? null,
       customGPerKgInput: s.customGPerKg != null ? String(s.customGPerKg) : "",
+      quizStep: s.quizStep || "kidney",
+      quizKidney: s.quizKidney || null,
+      quizAge: s.quizAge || null,
+      quizActivity: s.quizActivity || null,
       foodSet: ["us","veg","desi"].includes(s.foodSet) ? s.foodSet : "us",
       mealSlots: Math.min(6, Math.max(2, s.mealSlots || 3)),
       activeMeal: s.activeMeal || 0,
@@ -91,6 +100,10 @@ function save() {
       gPerKg: state.gPerKg,
       customInputMode: state.customInputMode,
       customGPerKg: state.customGPerKg,
+      quizStep: state.quizStep,
+      quizKidney: state.quizKidney,
+      quizAge: state.quizAge,
+      quizActivity: state.quizActivity,
       foodSet: state.foodSet,
       mealSlots: state.mealSlots,
       activeMeal: state.activeMeal,
@@ -335,6 +348,7 @@ function clearAll() {
     screen: "profile", tab: "add", profileId: null, weightKg: null, weightUnit: "lb",
     weightInput: "", targetMode: "suggested", customTarget: null, gPerKg: null,
     customInputMode: "g", customGPerKg: null, customGPerKgInput: "", editGoal: false,
+    quizStep: "kidney", quizKidney: null, quizAge: null, quizActivity: null, quizDir: 0,
     foodSet: "us", mealSlots: 3, activeMeal: 0, plan: [],
     filter: "for-you", query: "", flash: "", showCustom: false, showSrc: null,
   });
@@ -1000,25 +1014,23 @@ function progressHero() {
   );
 }
 
-/* ---------- Onboarding (v0.3.10: general adult + athlete profiles; existing math unchanged) ---------- */
+/* ---------- Onboarding (v0.3.12: guided questions; general/older default 1.2) ---------- */
 const ONBOARD_COPY = {
   ckd: { title: "CKD, not on dialysis", sub: "A kidney-conscious goal from your weight." },
   dialysis: { title: "On dialysis (HD or PD)", sub: "Dialysis raises protein needs. We'll help you get there." },
-  general: { title: "General adult (no kidney disease)", sub: "The usual adult RDA from your weight." },
+  general: { title: "General adult (no kidney disease)", sub: "The 2025–2030 US Dietary Guidelines goal from your weight." },
+  older: { title: "Older adult (65+)", sub: "The 2025–2030 US Dietary Guidelines goal from your weight." },
   athlete: { title: "Active / athlete", sub: "A training goal from your weight." },
 };
 const RATE_SOURCE = {
   ckd: "KDOQI 2020 kidney nutrition guideline",
   dialysis: "KDOQI 2020 kidney nutrition guideline",
-  general: "Adult RDA (National Academies)",
+  general: "2025–2030 Dietary Guidelines for Americans",
+  older: "2025–2030 Dietary Guidelines for Americans",
   athlete: "ACSM / ISSN sports nutrition guidance",
 };
 const CARE_NOTE = "For learning only. Your care team has the final say.";
 const KIDNEY_CARE_NOTE = "If you have kidney disease, follow the goal from your care team.";
-const PROFILE_GROUPS = [
-  { id: "kidney", label: "Kidney care", ids: ["ckd", "dialysis"] },
-  { id: "everyone", label: "Everyone else", ids: ["general", "athlete"] },
-];
 
 function profileTitle(p) { return (ONBOARD_COPY[p.id] || {}).title || p.label; }
 
@@ -1038,6 +1050,22 @@ function goToSetupScreen() {
   render();
 }
 
+function startQuiz() {
+  state.screen = "profile";
+  state.quizStep = "kidney";
+  state.quizDir = 0;
+  state.editGoal = false;
+  render();
+}
+
+function quizGo(step, dir) {
+  state.quizStep = step;
+  state.quizDir = dir;
+  state.screen = "profile";
+  save();
+  render();
+}
+
 function startCustomPath() {
   state.profileId = "custom";
   state.targetMode = "custom";
@@ -1047,6 +1075,7 @@ function startCustomPath() {
   state.customInputMode = state.customInputMode === "gkg" ? "gkg" : "g";
   state.showCustom = false;
   state.editGoal = false;
+  state.quizKidney = null;
   state.screen = "custom";
   save();
   render();
@@ -1056,6 +1085,8 @@ function startCustomPath() {
 }
 
 function pickProfile(p) {
+  if (typeof p === "string") p = CONTENT.profiles[p];
+  if (!p) return;
   state.profileId = p.id;
   state.gPerKg = p.g_per_kg_default;
   state.mealSlots = defaultMealSlots();
@@ -1069,65 +1100,172 @@ function pickProfile(p) {
   if (w && !w.value) { try { w.focus({ preventScroll: true }); } catch (_) {} }
 }
 
-function profileCard(p, compact) {
-  return el("button", {
-    class: "profileBtn tone-" + p.id + (compact ? " compact" : "") + (state.profileId === p.id ? " picked" : ""),
-    type: "button", id: `pick-${p.id}`, role: "listitem", "data-id": p.id,
-    onclick: () => pickProfile(p)
-  },
-    el("span", { class: "pIcon", "aria-hidden": "true", text: p.emoji }),
-    el("span", { class: "pText" },
-      el("strong", { text: profileTitle(p) }),
-      el("span", { text: (ONBOARD_COPY[p.id] || {}).sub || p.about })
-    ),
-    compact ? null : el("span", { class: "pChev", "aria-hidden": "true", text: state.profileId === p.id ? "✓" : "›" })
+function answerKidney(val) {
+  state.quizKidney = val;
+  if (val === "custom") { startCustomPath(); return; }
+  quizGo(val === "yes" ? "ckdType" : "age", 1);
+}
+
+function answerCkdType(id) {
+  pickProfile(id);
+}
+
+function answerAge(val) {
+  state.quizAge = val;
+  quizGo("activity", 1);
+}
+
+function answerActivity(val) {
+  state.quizActivity = val;
+  const id = val === "training" ? "athlete" : (state.quizAge === "65plus" ? "older" : "general");
+  pickProfile(id);
+}
+
+function backFromSetup() {
+  state.editGoal = false;
+  state.quizDir = -1;
+  if (state.profileId === "ckd" || state.profileId === "dialysis") state.quizStep = "ckdType";
+  else if (state.profileId === "general" || state.profileId === "older" || state.profileId === "athlete") state.quizStep = "activity";
+  else state.quizStep = "kidney";
+  state.screen = "profile";
+  render();
+}
+
+function setupStepMeta() {
+  if (state.profileId === "ckd" || state.profileId === "dialysis") return { step: 3, total: 3, label: "Step 3 of 3" };
+  if (state.profileId === "general" || state.profileId === "older" || state.profileId === "athlete") return { step: 4, total: 4, label: "Step 4 of 4" };
+  return { step: 2, total: 2, label: "Step 2 of 2" };
+}
+
+function quizDots(step, total, label) {
+  return el("div", { class: "stepDots", "aria-label": label || `Step ${step} of ${total}` },
+    ...Array.from({ length: total }, (_, i) => el("span", { class: "dot" + (i < step ? " on" : "") })),
+    el("b", { text: `Step ${step} of ${total}` })
   );
 }
 
-function renderProfile() {
-  const groups = PROFILE_GROUPS.map((g) => {
-    const cards = g.ids.map((id) => CONTENT.profiles[id]).filter(Boolean);
-    if (!cards.length) return null;
-    return el("div", { class: "profileGroup", "data-group": g.id },
-      el("div", { class: "groupLabel", text: g.label }),
-      el("div", { class: "profileGrid cols2", role: "list", "aria-label": g.label },
-        ...cards.map((p) => profileCard(p, true))
-      ),
-      g.id === "everyone"
-        ? el("p", { class: "groupNote", id: "everyoneNote", text: "Older adults are often advised 1.0–1.2 g per kg — adjust this in the next step. If you have kidney disease, follow the goal from your care team." })
-        : null
-    );
-  });
+function quizChip({ id, title, sub, on, primary, alt }) {
+  return el("button", {
+    class: "quizChip" + (primary ? " quizPrimary" : "") + (alt ? " quizAlt" : ""),
+    type: "button", id,
+    onclick: on
+  },
+    el("strong", { text: title }),
+    sub ? el("span", { text: sub }) : null
+  );
+}
 
-  return [el("div", { class: "card onboard onboardStep1" },
-    el("div", { class: "stepDots", "aria-label": "Step 1 of 2" },
-      el("span", { class: "dot on" }), el("span", { class: "dot" }), el("b", { text: "Step 1 of 2" })),
-    el("h2", { class: "welcomeTitle", text: "Let's find your protein goal 👋" }),
-    el("p", { class: "welcomeSub", text: "Two quick steps, then you'll build your plate." }),
-    el("div", { class: "pickLabel", id: "pickLabel", text: "Which fits you best?" }),
-    ...groups,
-    el("div", { class: "orBreak", text: "or" }),
-    el("button", {
-      class: "profileBtn customPick" + (state.profileId === "custom" ? " picked" : ""),
-      type: "button", id: "pick-custom",
-      onclick: startCustomPath
-    },
-      el("span", { class: "pIcon", "aria-hidden": "true", text: "🎯" }),
-      el("span", { class: "pText" },
-        el("strong", { text: "I already have a goal from my care team" }),
-        el("span", { text: "Type it in grams a day, or as g per kg." })
+function quizShell({ back, backId, step, total, title, sub, kids, note, extraNote }) {
+  const dirClass = state.quizDir < 0 ? " back" : (state.quizDir > 0 ? " fwd" : "");
+  return [el("div", { class: "card onboard quizCard" },
+    el("div", { class: "quizPane" + dirClass },
+      el("div", { class: "row between quizTop" },
+        back
+          ? el("button", { class: "linkish backLink", type: "button", id: backId || "quizBack",
+              onclick: back, text: "‹ Back" })
+          : el("span", { class: "backLink spacer", text: " " }),
+        quizDots(step, total, `Step ${step} of ${total}`)
       ),
-      el("span", { class: "pChev", "aria-hidden": "true", text: "›" })
-    ),
-    el("p", { class: "careNote", text: "🔒 Stays on this device. " + CARE_NOTE })
+      el("h2", { class: "welcomeTitle", id: "quizTitle", text: title }),
+      sub ? el("p", { class: "welcomeSub", text: sub }) : null,
+      el("div", { class: "quizChoices", id: "quizChoices" }, ...kids),
+      extraNote || null,
+      el("p", { class: "careNote", text: note || ("🔒 Stays on this device. " + CARE_NOTE) })
+    )
   )];
 }
 
-/** Refresh result card, math line, and CTA in place (keeps keyboard focus while typing). */
+function renderQuiz() {
+  const step = state.quizStep || "kidney";
+  if (step === "ckdType") {
+    return quizShell({
+      back: () => quizGo("kidney", -1),
+      step: 2, total: 3,
+      title: "Which fits you?",
+      sub: "We'll suggest a kidney-conscious protein goal from your weight.",
+      kids: [
+        quizChip({ id: "pick-ckd", title: "CKD, not on dialysis", sub: "A kidney-conscious goal from your weight.", on: () => answerCkdType("ckd") }),
+        quizChip({ id: "pick-dialysis", title: "On dialysis (HD or PD)", sub: "Dialysis raises protein needs. We'll help you get there.", on: () => answerCkdType("dialysis") }),
+      ]
+    });
+  }
+  if (step === "age") {
+    return quizShell({
+      back: () => quizGo("kidney", -1),
+      step: 2, total: 4,
+      title: "Your age?",
+      sub: "This helps us suggest the right everyday goal.",
+      kids: [
+        quizChip({ id: "quiz-age-under65", title: "Under 65", on: () => answerAge("under65") }),
+        quizChip({ id: "quiz-age-65plus", title: "65 or older", on: () => answerAge("65plus") }),
+      ]
+    });
+  }
+  if (step === "activity") {
+    return quizShell({
+      back: () => quizGo("age", -1),
+      step: 3, total: 4,
+      title: "How active are you?",
+      sub: "Everyday routines and regular training use different protein goals.",
+      kids: [
+        quizChip({ id: "quiz-activity-everyday", title: "Everyday", sub: "A usual daily routine.", on: () => answerActivity("everyday") }),
+        quizChip({ id: "quiz-activity-training", title: "Regular training / athlete", sub: "I work out or compete regularly.", on: () => answerActivity("training") }),
+      ]
+    });
+  }
+  return quizShell({
+    back: null,
+    step: 1, total: 3,
+    title: "Do you have kidney disease?",
+    sub: "A few quick questions, then you'll build your plate.",
+    kids: [
+      quizChip({ id: "quiz-kidney-yes", title: "Yes", primary: true, on: () => answerKidney("yes") }),
+      quizChip({ id: "quiz-kidney-no", title: "No", primary: true, on: () => answerKidney("no") }),
+      quizChip({ id: "pick-custom", title: "I have a goal from my care team", sub: "Type it in grams a day, or as g per kg.", alt: true, on: () => answerKidney("custom") }),
+    ],
+    extraNote: el("p", { class: "groupNote kidneyNote", text: KIDNEY_CARE_NOTE })
+  });
+}
+
+function renderProfile() { return renderQuiz(); }
+
+function prefersReducedMotion() {
+  try { return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches); }
+  catch (_) { return false; }
+}
+
+function animateCountUp(node, target, prefix) {
+  if (!node || !isFinite(target)) return;
+  const pre = prefix || "";
+  if (prefersReducedMotion()) { node.textContent = `${pre}${target} g`; return; }
+  const start = performance.now();
+  const dur = 700;
+  const tick = (now) => {
+    if (!node.isConnected) return;
+    const p = Math.min(1, (now - start) / dur);
+    const eased = 1 - Math.pow(1 - p, 3);
+    node.textContent = `${pre}${Math.round(target * eased)} g`;
+    if (p < 1) requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+
+function maybeCountUp() {
+  const big = document.getElementById("suggestBig");
+  if (big && big.dataset.countup) {
+    const n = parseInt(big.dataset.countup, 10);
+    const prefix = big.dataset.countPrefix || "";
+    delete big.dataset.countup;
+    animateCountUp(big, n, prefix);
+  }
+}
+
+
 function updateSetupLive() {
   syncCustomGrams();
   const res = document.getElementById("resultCard");
   if (res) res.replaceWith(resultCard());
+  maybeCountUp();
   const math = document.getElementById("suggestBox");
   if (math) math.textContent = mathLine();
   const rateLine = document.getElementById("rateSourceLine");
@@ -1152,6 +1290,13 @@ function updateSetupLive() {
   }
   const split = document.getElementById("customMathLine");
   if (split) split.textContent = customMathLine();
+  syncRevealClass();
+}
+
+function syncRevealClass() {
+  const card = document.querySelector(".card.onboard");
+  if (!card) return;
+  card.classList.toggle("hasReveal", !!resultCard._shown);
 }
 
 function planReady() {
@@ -1174,8 +1319,8 @@ function rateSourceLine(p) {
   const src = RATE_SOURCE[p.id] || "published guideline";
   const rate = state.gPerKg != null ? state.gPerKg : p.g_per_kg_default;
   const adjusted = p && rate !== p.g_per_kg_default;
-  const extra = p.id === "general"
-    ? " Older adults are often advised 1.0–1.2 g per kg."
+  const extra = (p.id === "general" || p.id === "older")
+    ? " The Guidelines suggest 1.2–1.6 g per kg, adjusted for calorie needs. The adult RDA of 0.8 g per kg is the minimum you can set."
     : "";
   return `Rate: ${rate} g per kg, from the ${src}.` + (adjusted ? " (You adjusted this.)" : "") + extra + (DRAFT ? " Rates pending physician review." : "");
 }
@@ -1273,6 +1418,8 @@ function resultCard() {
       class: "suggestBig tapEdit", type: "button", id: "suggestBig",
       "aria-label": `Daily goal ${t} grams. Tap to edit.`,
       onclick: beginEditGoal,
+      "data-countup": fresh ? String(t) : null,
+      "data-count-prefix": custom ? "" : "~",
       text: custom ? `${t} g` : `~${t} g`
     }),
     el("div", { class: "resultUnit", text: "of protein a day" }),
@@ -1327,7 +1474,7 @@ function makeWeightControls(onLive) {
 }
 
 function canAdjustRate(p) {
-  return !!(p && p.id !== "custom" && p.g_per_kg_max != null && p.g_per_kg_min != null && p.g_per_kg_max - p.g_per_kg_min >= 0.15 && (p.id === "athlete" || p.id === "general"));
+  return !!(p && p.id !== "custom" && p.g_per_kg_max != null && p.g_per_kg_min != null && p.g_per_kg_max - p.g_per_kg_min >= 0.15 && (p.id === "athlete" || p.id === "general" || p.id === "older"));
 }
 
 function rateStep(delta) {
@@ -1348,8 +1495,8 @@ function rateNote(p) {
   if (p.id === "athlete") {
     return "You can set this anywhere in the ACSM range of 1.2–2.0 g per kg (ISSN typically cites 1.4–2.0). Strength training is often toward the higher end.";
   }
-  if (p.id === "general") {
-    return "The usual adult RDA is 0.8 g per kg. Older adults are often advised 1.0–1.2 g per kg.";
+  if (p.id === "general" || p.id === "older") {
+    return "The 2025–2030 Dietary Guidelines for Americans suggest 1.2–1.6 g per kg, adjusted for calorie needs. The adult RDA of 0.8 g per kg is the minimum you can set here.";
   }
   return "";
 }
@@ -1431,15 +1578,14 @@ function renderSetup() {
     )
   );
 
-  return [el("div", { class: "card onboard" },
+  return [el("div", { class: "card onboard" + (resultCard._shown ? " hasReveal" : "") },
     el("div", { class: "row between" },
       el("button", { class: "linkish backLink", type: "button", id: "backProfileBtn",
-        onclick: () => { state.screen = "profile"; state.editGoal = false; render(); }, text: "‹ Back" }),
-      el("div", { class: "stepDots", "aria-label": "Step 2 of 2" },
-        el("span", { class: "dot on" }), el("span", { class: "dot on" }), el("b", { text: "Step 2 of 2" }))
+        onclick: backFromSetup, text: "‹ Back" }),
+      (() => { const m = setupStepMeta(); return quizDots(m.step, m.total, m.label); })()
     ),
     el("button", { class: "profilePill", type: "button", id: "profilePill", "aria-label": `${profileTitle(p)}. Tap to change.`,
-      onclick: () => { state.screen = "profile"; render(); } },
+      onclick: startQuiz },
       el("span", { "aria-hidden": "true", text: p.emoji }), el("span", { text: profileTitle(p) }), el("span", { class: "pillEdit", text: "Change" })),
     el("h2", { class: "welcomeTitle", text: "About how much do you weigh?" }),
     el("p", { class: "welcomeSub", text: "A rough number is fine. You can change it anytime." }),
@@ -1468,7 +1614,7 @@ function renderSetup() {
       text: "Build my plate →"
     }),
     details,
-    (p.id === "general" || p.id === "athlete")
+    (p.id === "general" || p.id === "older" || p.id === "athlete")
       ? el("p", { class: "careNote kidneyNote", text: KIDNEY_CARE_NOTE })
       : null,
     el("p", { class: "careNote", text: CARE_NOTE })
@@ -1573,15 +1719,15 @@ function renderCustom() {
     )
   );
 
-  return [el("div", { class: "card onboard onboardCustom" },
+  return [el("div", { class: "card onboard onboardCustom" + (resultCard._shown ? " hasReveal" : "") },
     el("div", { class: "row between" },
       el("button", { class: "linkish backLink", type: "button", id: "backProfileBtn",
-        onclick: () => { state.screen = "profile"; state.editGoal = false; render(); }, text: "‹ Back" }),
+        onclick: startQuiz, text: "‹ Back" }),
       el("div", { class: "stepDots", "aria-label": "Your own goal" },
         el("span", { class: "dot on" }), el("b", { text: "Your own goal" }))
     ),
     el("button", { class: "profilePill", type: "button", id: "profilePill", "aria-label": "My own goal. Tap to change.",
-      onclick: () => { state.screen = "profile"; render(); } },
+      onclick: startQuiz },
       el("span", { "aria-hidden": "true", text: "🎯" }), el("span", { text: "My own goal" }), el("span", { class: "pillEdit", text: "Change" })),
     el("h2", { class: "welcomeTitle", text: "What's your daily protein goal?" }),
     el("p", { class: "welcomeSub", text: "Enter the number from your care team. You can change it anytime." }),
@@ -1787,7 +1933,7 @@ function renderPlateTab() {
 
 function sourceItems() {
   const items = [];
-  const order = ["ckd", "dialysis", "general", "athlete"];
+  const order = ["ckd", "dialysis", "general", "older", "athlete"];
   for (const id of order) {
     const p = CONTENT.profiles[id];
     if (!p) continue;
@@ -1811,7 +1957,7 @@ function renderMoreTab() {
       el("button", { class: "btn btnGhost btnBlock", type: "button", id: "editTargetBtn",
         onclick: goToSetupScreen, text: "Edit weight / target" }),
       el("button", { class: "btn btnGhost btnBlock", type: "button", id: "changeProfileBtn",
-        onclick: () => { state.screen = "profile"; render(); }, text: "Change profile" }),
+        onclick: startQuiz, text: "Change profile" }),
       el("button", { class: "btn btnDanger btnBlock", type: "button", id: "clearAllBtn",
         onclick: () => { if (confirm("Clear this device's saved plan?")) clearAll(); },
         text: "Clear saved plan" }),
@@ -1881,6 +2027,7 @@ function render() {
     : state.screen === "setup" ? renderSetup()
     : renderPlay();
   for (const part of parts) app.append(part);
+  maybeCountUp();
   if (state.sheet === "share") app.append(renderShareSheet());
   else if (state.sheet === "shop") app.append(renderShopSheet());
 
@@ -1907,4 +2054,4 @@ if ("serviceWorker" in navigator) {
   });
 }
 
-window.__PP = { state, dailyTarget, totals, suggestedTarget, profile, addFood, changeServings, changeServingsAt, save, render, relevanceScore, profileScore, mealFitScore, healthyProteinBoost, activeMealRole, perMealTarget, mealProtein, defaultMealSlots, mealComplete, dayComplete, suggestForMeal, nextOpenMeal, mealLabel, filteredFoods, shakeFoods, buildPlanText, buildShoppingListText, shoppingListItems, shopName, isGroceryItem, amazonSearchUrl, costcoSearchUrl, canNativeShare, customGoalError, customGoalReady, planReady, GOAL_G_MIN, GOAL_G_MAX, GOAL_GKG_MIN, GOAL_GKG_MAX, startCustomPath };
+window.__PP = { state, dailyTarget, totals, suggestedTarget, profile, addFood, changeServings, changeServingsAt, save, render, relevanceScore, profileScore, mealFitScore, healthyProteinBoost, activeMealRole, perMealTarget, mealProtein, defaultMealSlots, mealComplete, dayComplete, suggestForMeal, nextOpenMeal, mealLabel, filteredFoods, shakeFoods, buildPlanText, buildShoppingListText, shoppingListItems, shopName, isGroceryItem, amazonSearchUrl, costcoSearchUrl, canNativeShare, customGoalError, customGoalReady, planReady, GOAL_G_MIN, GOAL_G_MAX, GOAL_GKG_MIN, GOAL_GKG_MAX, startCustomPath, startQuiz, pickProfile, answerKidney, answerAge, answerActivity, answerCkdType };
